@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::context::RpcContext;
 use crate::db::model::CurrentDependencyInfo;
 use crate::s9pk::manifest::PackageId;
-use crate::status::health_check::{HealthCheckId, HealthCheckResult, HealthCheckResultVariant};
+use crate::status::health_check::{HealthCheckId, HealthCheckResultVariant};
 use crate::status::MainStatus;
 use crate::util::Version;
 use crate::volume::Volumes;
@@ -30,8 +30,8 @@ pub enum DependencyError {
     }, // { "type": "config-unsatisfied", "error": "Bitcoin Core must have pruning set to manual." }
     NotRunning,   // { "type": "not-running" }
     HealthChecksFailed {
-        failures: BTreeMap<HealthCheckId, HealthCheckResult>,
-    }, // { "type": "health-checks-failed", "checks": { "rpc": { "time": "2021-05-11T18:21:29Z", "result": "warming-up" } } }
+        failures: BTreeMap<HealthCheckId, HealthCheckResultVariant>,
+    }, // { "type": "health-checks-failed", "checks": { "rpc": { "result": "warming-up" } } }
 }
 impl DependencyError {
     pub fn merge_with(self, other: DependencyError) -> DependencyError {
@@ -82,7 +82,7 @@ impl std::fmt::Display for DependencyError {
                     } else {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{} @ {} {}", check, res.time, res.result)?;
+                    write!(f, "{} @ {}", check, res)?;
                 }
                 Ok(())
             }
@@ -212,7 +212,7 @@ impl DepInfo {
             | MainStatus::Running { health, .. } => {
                 let mut failures = BTreeMap::new();
                 for (check, res) in health {
-                    if !matches!(res.result, HealthCheckResultVariant::Success) {
+                    if !matches!(res, HealthCheckResultVariant::Success) {
                         failures.insert(check.clone(), res.clone());
                     }
                 }
