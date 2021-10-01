@@ -9,6 +9,7 @@ extern crate failure;
 extern crate pest;
 #[macro_use]
 extern crate pest_derive;
+// extern crate writeln;
 
 mod backup;
 mod config;
@@ -23,6 +24,7 @@ pub enum CompatRes {
     SetResult,
     ConfigRes,
 }
+use std::io::Read;
 
 fn main() {
     match inner_main() {
@@ -184,7 +186,9 @@ fn inner_main() -> Result<(), anyhow::Error> {
                 Ok(())
             }
             ("set", Some(sub_m)) => {
-                let config = serde_yaml::from_reader(stdin())?;
+                let mut buffer = String::new();
+                stdin().read_to_string(&mut buffer)?;
+                let config = serde_yaml::from_str(&dbg!(buffer))?;
                 let cfg_path = Path::new(sub_m.value_of("mountpoint").unwrap()).join("start9");
                 if !cfg_path.exists() {
                     std::fs::create_dir_all(&cfg_path).unwrap();

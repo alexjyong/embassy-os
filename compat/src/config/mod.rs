@@ -11,6 +11,7 @@ pub mod rules;
 
 use anyhow::anyhow;
 pub use rules::{ConfigRuleEntry, ConfigRuleEntryWithSuggestions};
+use std::io::{Write};
 
 pub fn validate_configuration(
     name: &str,
@@ -21,23 +22,33 @@ pub fn validate_configuration(
     let rules: Vec<ConfigRuleEntry> = serde_yaml::from_reader(std::fs::File::open(rules_path)?)?;
     let mut cfgs = LinearMap::new();
     cfgs.insert(name, Cow::Borrowed(&config));
-    let rule_check = rules
+    writeln!(std::fs::File::create(config_path.with_extension(".rules.tmp"))?, "{:?}", &rules)?;
+    writeln!(std::fs::File::create(config_path.with_extension(".config.tmp"))?, "{:?}", &config)?;
+    if rules.is_empty() {
+        Ok(SetResult {
+            depends_on: BTreeMap::new(),
+            // sending sigterm so service is restarted - in 0.3.x services, this is whatever signal is needed to send to the process to pick up the configuration
+            signal: Some(nix::sys::signal::SIGTERM),
+        })
+    } else {
+        let rule_check = rules
         .into_iter()
         .map(|r| r.check(&config, &cfgs))
         .bcollect::<Vec<_>>();
-    match rule_check {
-        Ok(_) => {
-            // create temp config file
-            serde_yaml::to_writer(std::fs::File::create(config_path.with_extension("tmp"))?, &config)?;
-            std::fs::rename(config_path.with_extension("tmp"), config_path)?;
-            // return set result
-            Ok(SetResult {
-                depends_on: BTreeMap::new(),
-                // sending sigterm so service is restarted - in 0.3.x services, this is whatever signal is needed to send to the process to pick up the configuration
-                signal: Some(nix::sys::signal::SIGTERM),
-            })
+        match rule_check {
+            Ok(_) => {
+                // create temp config file
+                serde_yaml::to_writer(std::fs::File::create(config_path.with_extension("tmp"))?, &config)?;
+                std::fs::rename(config_path.with_extension("tmp"), config_path)?;
+                // return set result
+                Ok(SetResult {
+                    depends_on: BTreeMap::new(),
+                    // sending sigterm so service is restarted - in 0.3.x services, this is whatever signal is needed to send to the process to pick up the configuration
+                    signal: Some(nix::sys::signal::SIGTERM),
+                })
+            }
+            Err(e) => Err(anyhow!("{}", e))
         }
-        Err(e) => Err(anyhow!("{}", e))
     }
 }
 
