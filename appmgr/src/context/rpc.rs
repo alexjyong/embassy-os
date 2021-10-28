@@ -149,7 +149,7 @@ impl RpcContext {
             false,
             tor_proxy.ip(),
             tor_proxy.port(),
-        );
+        )?;
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
         let secret_store = base.secret_store().await?;
         let db = base.db(&secret_store).await?;

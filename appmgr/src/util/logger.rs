@@ -1,17 +1,20 @@
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use reqwest::{Client, Url};
+use reqwest::{Client, Proxy, Url};
 use serde::Serialize;
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
 
 use crate::version::COMMIT_HASH;
+use crate::{Error, ResultExt};
 
 pub struct SharingLayer {
     log_epoch: Arc<AtomicU64>,
     sharing: Arc<AtomicBool>,
     share_dest: String,
+    tor_proxy: Client,
 }
 impl<S: Subscriber> Layer<S> for SharingLayer {
     fn on_event(
@@ -55,7 +58,6 @@ impl<S: Subscriber> Layer<S> for SharingLayer {
 pub struct EmbassyLogger {
     log_epoch: Arc<AtomicU64>,
     sharing: Arc<AtomicBool>,
-    tor_proxy: Client,
 }
 impl EmbassyLogger {
     fn base_subscriber() -> impl Subscriber {
@@ -83,36 +85,32 @@ impl EmbassyLogger {
         share_errors: bool,
         tor_proxy_ip: IpAddr,
         tor_proxy_port: u16,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         use tracing_subscriber::prelude::*;
 
         let share_dest = match share_dest {
             None => "https://beta-registry-0-3.start9labs.com/error-logs".to_owned(), // TODO
             Some(a) => a.to_string(),
         };
+        let tor_proxy = Client::builder()
+            .proxy(
+                Proxy::http(format!("socks5h://{}:{}", tor_proxy_ip, tor_proxy_port))
+                    .with_kind(crate::ErrorKind::Network)?,
+            )
+            .build()
+            .with_kind(crate::ErrorKind::Network)?;
         let sharing = Arc::new(AtomicBool::new(share_errors));
         let sharing_layer = SharingLayer {
             log_epoch: log_epoch.clone(),
             share_dest,
             sharing: sharing.clone(),
+            tor_proxy,
         };
 
         Self::base_subscriber().with(sharing_layer).init();
         color_eyre::install().expect("Color Eyre Init");
 
-        let tor_proxy = Client::builder()
-            .proxy(Proxy::http(format!(
-                "socks5h://{}:{}",
-                tor_proxy_ip, tor_proxy_port
-            )))
-            .build()
-            .with_kind(crate::ErrorKind::Network);
-
-        EmbassyLogger {
-            log_epoch,
-            sharing,
-            tor_proxy,
-        }
+        Ok(EmbassyLogger { log_epoch, sharing })
     }
     pub fn set_sharing(&self, sharing: bool) {
         self.sharing.store(sharing, Ordering::SeqCst)
