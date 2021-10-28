@@ -139,7 +139,17 @@ impl RpcContext {
     pub async fn init<P: AsRef<Path>>(cfg_path: Option<P>) -> Result<Self, Error> {
         let base = RpcContextConfig::load(cfg_path).await?;
         let log_epoch = Arc::new(AtomicU64::new(rand::random()));
-        let logger = EmbassyLogger::init(log_epoch.clone(), base.log_server.clone(), false);
+        let tor_proxy = base.tor_socks.unwrap_or(SocketAddr::V4(SocketAddrV4::new(
+            Ipv4Addr::new(127, 0, 0, 1),
+            9050,
+        )));
+        let logger = EmbassyLogger::init(
+            log_epoch.clone(),
+            base.log_server.clone(),
+            false,
+            tor_proxy.ip(),
+            tor_proxy.port(),
+        );
         let (shutdown, _) = tokio::sync::broadcast::channel(1);
         let secret_store = base.secret_store().await?;
         let db = base.db(&secret_store).await?;
@@ -180,10 +190,7 @@ impl RpcContext {
             websocket_count: AtomicUsize::new(0),
             logger,
             log_epoch,
-            tor_socks: base.tor_socks.unwrap_or(SocketAddr::V4(SocketAddrV4::new(
-                Ipv4Addr::new(127, 0, 0, 1),
-                9050,
-            ))),
+            tor_socks: tor_proxy,
             notification_manager,
         });
         let metrics_seed = seed.clone();

@@ -45,7 +45,7 @@ impl<S: Subscriber> Layer<S> for SharingLayer {
                         .map(|f| f.to_string()),
                 };
                 // we don't care about the result and need it to be fast
-                tokio::spawn(Client::new().post(&self.share_dest).json(&body).send());
+                tokio::spawn(self.tor_proxy.post(&self.share_dest).json(&body).send());
             }
         }
     }
@@ -55,6 +55,7 @@ impl<S: Subscriber> Layer<S> for SharingLayer {
 pub struct EmbassyLogger {
     log_epoch: Arc<AtomicU64>,
     sharing: Arc<AtomicBool>,
+    tor_proxy: Client,
 }
 impl EmbassyLogger {
     fn base_subscriber() -> impl Subscriber {
@@ -76,7 +77,13 @@ impl EmbassyLogger {
         Self::base_subscriber().init();
         color_eyre::install().expect("Color Eyre Init");
     }
-    pub fn init(log_epoch: Arc<AtomicU64>, share_dest: Option<Url>, share_errors: bool) -> Self {
+    pub fn init(
+        log_epoch: Arc<AtomicU64>,
+        share_dest: Option<Url>,
+        share_errors: bool,
+        tor_proxy_ip: IpAddr,
+        tor_proxy_port: u16,
+    ) -> Self {
         use tracing_subscriber::prelude::*;
 
         let share_dest = match share_dest {
@@ -93,7 +100,19 @@ impl EmbassyLogger {
         Self::base_subscriber().with(sharing_layer).init();
         color_eyre::install().expect("Color Eyre Init");
 
-        EmbassyLogger { log_epoch, sharing }
+        let tor_proxy = Client::builder()
+            .proxy(Proxy::http(format!(
+                "socks5h://{}:{}",
+                tor_proxy_ip, tor_proxy_port
+            )))
+            .build()
+            .with_kind(crate::ErrorKind::Network);
+
+        EmbassyLogger {
+            log_epoch,
+            sharing,
+            tor_proxy,
+        }
     }
     pub fn set_sharing(&self, sharing: bool) {
         self.sharing.store(sharing, Ordering::SeqCst)
