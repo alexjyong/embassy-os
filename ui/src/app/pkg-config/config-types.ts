@@ -1,3 +1,5 @@
+import { Tracing } from "trace_events"
+
 export interface ConfigSpec { [key: string]: ValueSpec }
 
 export type ValueType = 'string' | 'number' | 'boolean' | 'enum' | 'list' | 'object' | 'pointer' | 'union'
@@ -43,9 +45,12 @@ export interface ValueSpecUnion extends ListValueSpecUnion, WithStandalone {
 
 export interface ValueSpecPointer extends WithStandalone {
   type: 'pointer'
-  subtype: 'app' | 'system'
-  target: 'lan-address' | 'tor-address' | 'config'
-  'app-id': string
+  subtype: 'package' | 'system'
+  'package-id': string
+  target: 'lan-address' | 'tor-address' | 'config' | 'tor-key'
+  interface: string // will only exist if target = tor-key || tor-address || lan-address
+  selector?: string // will only exist if target = config
+  multi?: boolean // will only exist if target = config
 }
 
 export interface ValueSpecObject extends ListValueSpecObject, WithStandalone {

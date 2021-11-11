@@ -214,7 +214,7 @@ pub async fn subscribe(ctx: RpcContext, req: Request<Body>) -> Result<Response<B
     Ok(res)
 }
 
-#[command(subcommands(revisions, dump, put))]
+#[command(subcommands(revisions, dump, put, remove))]
 pub fn db() -> Result<(), RpcError> {
     Ok(())
 }
@@ -286,4 +286,20 @@ pub async fn ui(
         response: (),
         revision: ctx.db.put(&ptr, &value, None).await?,
     })
+}
+
+#[command(display(display_serializable))]
+pub async fn remove(
+    #[context] ctx: RpcContext,
+    #[arg] id: crate::s9pk::manifest::PackageId,
+    #[allow(unused_variables)]
+    #[arg(long = "format")]
+    format: Option<IoFormat>,
+) -> Result<(), Error> {
+    let mut db = ctx.db.handle();
+    crate::db::DatabaseModel::new()
+        .package_data()
+        .remove(&mut db, &id)
+        .await?;
+    Ok(())
 }
