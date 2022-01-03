@@ -59,7 +59,7 @@
         <div *ngIf="ssid.key !== wifi.connected" slot="start" style="padding-right: 32px;"></div>
         <ion-icon *ngIf="ssid.key === wifi.connected" slot="start" size="large" name="checkmark" color="success"></ion-icon>
         <ion-label>{{ ssid.key }}</ion-label>
-        <img *ngIf="ssid.value < 5" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
+        <img *ngIf="ssid.value > 0 && ssid.value < 5" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
         <img *ngIf="ssid.value >= 5 && ssid.value < 50" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
         <img *ngIf="ssid.value >= 50 && ssid.value < 90" slot="end" src="assets/img/icons/wifi-2.png" style="max-width: 32px;" />
         <img *ngIf="ssid.value >= 90" slot="end" src="assets/img/icons/wifi-3.png" style="max-width: 32px;" />
