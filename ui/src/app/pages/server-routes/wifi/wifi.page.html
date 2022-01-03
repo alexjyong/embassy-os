@@ -55,7 +55,7 @@
     <!-- not loading -->
     <ng-container *ngIf="!loading && wifi.country">
       <ion-item-divider>Saved Networks</ion-item-divider>
-      <ion-item button detail="false" *ngFor="let ssid of wifi.ssids | keyvalue" (click)="presentAction(ssid)">
+      <ion-item button detail="false" *ngFor="let ssid of wifi.ssids | keyvalue" (click)="presentAction(ssid.key)">
         <div *ngIf="ssid.key !== wifi.connected" slot="start" style="padding-right: 32px;"></div>
         <ion-icon *ngIf="ssid.key === wifi.connected" slot="start" size="large" name="checkmark" color="success"></ion-icon>
         <ion-label>{{ ssid.key }}</ion-label>
