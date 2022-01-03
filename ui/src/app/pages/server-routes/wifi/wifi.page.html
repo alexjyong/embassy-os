@@ -55,22 +55,18 @@
     <!-- not loading -->
     <ng-container *ngIf="!loading && wifi.country">
       <ion-item-divider>Saved Networks</ion-item-divider>
-      <ion-item button detail="false" *ngFor="let ssid of wifi.ssids; let i = index;" (click)="presentAction(ssid, i)">
-        <div *ngIf="ssid !== wifi.connected" slot="start" style="padding-right: 32px;"></div>
-        <ion-icon *ngIf="ssid === wifi.connected" slot="start" size="large" name="checkmark" color="success"></ion-icon>
-        <ion-label>{{ ssid }}</ion-label>
-        <ng-container *ngIf="ssid === wifi.connected && wifi['signal-strength'] as strength">
-          <img *ngIf="strength < 5" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
-          <img *ngIf="strength >= 5 && strength < 50" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
-          <img *ngIf="strength >= 50 && strength < 90" slot="end" src="assets/img/icons/wifi-2.png" style="max-width: 32px;" />
-          <img *ngIf="strength >= 90" slot="end" src="assets/img/icons/wifi-3.png" style="max-width: 32px;" />
-        </ng-container>
+      <ion-item button detail="false" *ngFor="let ssid of wifi.ssids | keyvalue" (click)="presentAction(ssid)">
+        <div *ngIf="ssid.key !== wifi.connected" slot="start" style="padding-right: 32px;"></div>
+        <ion-icon *ngIf="ssid.key === wifi.connected" slot="start" size="large" name="checkmark" color="success"></ion-icon>
+        <ion-label>{{ ssid.key }}</ion-label>
+        <img *ngIf="ssid.value < 5" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
+        <img *ngIf="ssid.value >= 5 && ssid.value < 50" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />
+        <img *ngIf="ssid.value >= 50 && ssid.value < 90" slot="end" src="assets/img/icons/wifi-2.png" style="max-width: 32px;" />
+        <img *ngIf="ssid.value >= 90" slot="end" src="assets/img/icons/wifi-3.png" style="max-width: 32px;" />
       </ion-item>
-    </ng-container>
-
-    <ng-container *ngIf="!loading && wifi.country">
+   
       <ion-item-divider>Available Networks</ion-item-divider>
-      <ion-item button detail="false" *ngFor="let avWifi of availableWifi" (click)="presentModalAdd(avWifi.ssid, !!avWifi.security.length)">
+      <ion-item button detail="false" *ngFor="let avWifi of wifi['available-wifi']" (click)="presentModalAdd(avWifi.ssid, !!avWifi.security.length)">
         <ion-icon slot="start" name="add" size="large"></ion-icon>
         <ion-label>{{ avWifi.ssid }}</ion-label>
         <img *ngIf="avWifi.strength < 5" slot="end" src="assets/img/icons/wifi-1.png" style="max-width: 32px;" />

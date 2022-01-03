@@ -17,7 +17,6 @@ import { GenericFormPage } from 'src/app/modals/generic-form/generic-form.page'
 export class WifiPage {
   loading = true
   wifi: RR.GetWifiRes = { } as any
-  availableWifi: RR.GetAvailableWifiRes = []
   countries = require('../../../util/countries.json') as { [key: string]: string }
 
   constructor (
@@ -32,10 +31,7 @@ export class WifiPage {
 
   async ngOnInit () {
     try {
-      await Promise.all([
-        this.getWifi(),
-        this.getAvailableWifi(),
-      ])
+      await this.getWifi()
     } catch (e) {
       this.errToast.present(e)
     } finally {
@@ -43,22 +39,11 @@ export class WifiPage {
     }
   }
 
-  async getWifiData(timeout?: number) {
-    await Promise.all([
-      this.getWifi(timeout),
-      this.getAvailableWifi(timeout),
-    ])
-  }
-
   async getWifi (timeout?: number): Promise<void> {
     this.wifi = await this.api.getWifi({ }, timeout)
     if (!this.wifi.country) {
       await this.presentAlertCountry()
     }
-  }
-
-  async getAvailableWifi (timeout?: number): Promise<void> {
-    this.availableWifi = (await this.api.getAvailableWifi({ }, timeout)).sort((a, b) => b.strength - a.strength)
   }
 
   async presentAlertCountry (): Promise<void> {
@@ -120,14 +105,14 @@ export class WifiPage {
     await modal.present()
   }
 
-  async presentAction (ssid: string, i: number) {
+  async presentAction (ssid: string) {
     const buttons: ActionSheetButton[] = [
       {
         text: 'Forget',
         icon: 'trash',
         role: 'destructive',
         handler: () => {
-          this.delete(ssid, i)
+          this.delete(ssid)
         },
       },
     ]
@@ -180,14 +165,14 @@ export class WifiPage {
       if (attempts > maxAttempts) {
         this.presentToastFail()
         if (deleteOnFailure) {
-          this.wifi.ssids = this.wifi.ssids.filter(s => s !== ssid)
+          delete this.wifi.ssids[ssid]
         }
         break
       }
 
       try {
         const start = new Date().valueOf()
-        await this.getWifiData(timeout)
+        await this.getWifi(timeout)
         const end = new Date().valueOf()
         if (this.wifi.connected === ssid) {
           this.presentAlertSuccess(ssid)
@@ -259,7 +244,7 @@ export class WifiPage {
     }
   }
 
-  private async delete (ssid: string, i: number): Promise<void> {
+  private async delete (ssid: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
       spinner: 'lines',
       message: 'Deleting...',
@@ -269,7 +254,7 @@ export class WifiPage {
 
     try {
       await this.api.deleteWifi({ ssid })
-      this.wifi.ssids = this.wifi.ssids.filter((w, index) => index !== i)
+      delete this.wifi.ssids[ssid]
     } catch (e) {
       this.errToast.present(e)
     } finally {
@@ -292,7 +277,7 @@ export class WifiPage {
         priority: 0,
         connect: false,
       })
-      await this.getWifiData()
+      await this.getWifi()
     } catch (e) {
       this.errToast.present(e)
     } finally {
