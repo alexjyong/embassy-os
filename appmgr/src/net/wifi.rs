@@ -473,25 +473,6 @@ impl WpaCli {
             ErrorKind::Wifi,
         )))?)
     }
-    // pub async fn enable_network_low(&mut self, id: &NetworkId) -> Result<(), Error> {
-    //     let _ = Command::new("wpa_cli")
-    //         .arg("-i")
-    //         .arg(&self.interface)
-    //         .arg("enable_network")
-    //         .arg(&id.0)
-    //         .invoke(ErrorKind::Wifi)
-    //         .await?;
-    //     Ok(())
-    // }
-    // pub async fn save_config_low(&mut self) -> Result<(), Error> {
-    //     let _ = Command::new("wpa_cli")
-    //         .arg("-i")
-    //         .arg(&self.interface)
-    //         .arg("save_config")
-    //         .invoke(ErrorKind::Wifi)
-    //         .await?;
-    //     Ok(())
-    // }
     pub async fn remove_network_low(&mut self, id: NetworkId) -> Result<(), Error> {
         let _ = Command::new("nmcli")
             .arg("c")
@@ -501,15 +482,6 @@ impl WpaCli {
             .await?;
         Ok(())
     }
-    // pub async fn reconfigure_low(&mut self) -> Result<(), Error> {
-    //     let _ = Command::new("wpa_cli")
-    //         .arg("-i")
-    //         .arg(&self.interface)
-    //         .arg("reconfigure")
-    //         .invoke(ErrorKind::Wifi)
-    //         .await?;
-    //     Ok(())
-    // }
     #[instrument]
     pub async fn list_networks_low(&self) -> Result<BTreeMap<Ssid, NetworkId>, Error> {
         let r = Command::new("nmcli")
@@ -525,7 +497,7 @@ impl WpaCli {
                 let name = Ssid(cs.next()?.to_owned());
                 let uuid = NetworkId(cs.next()?.to_owned());
                 let _connection_type = cs.next()?;
-                let device = cs.next()?;
+                let _device = cs.next()?;
                 Some((name, uuid))
             })
             .collect::<BTreeMap<Ssid, NetworkId>>())
@@ -568,28 +540,18 @@ impl WpaCli {
             .await?;
         Ok(())
     }
-    // pub async fn new_password_low(&mut self, id: &Ssid, pass: &Psk) -> Result<(), Error> {
-    //     let _ = Command::new("wpa_cli")
-    //         .arg("-i")
-    //         .arg(&self.interface)
-    //         .arg("new_password")
-    //         .arg(&id.0)
-    //         .arg(&pass.0)
-    //         .invoke(ErrorKind::Wifi)
-    //         .await?;
-    //     Ok(())
-    // }
-
     // // High Level
-    // pub async fn save_config(&mut self) -> Result<(), Error> {
-    //     self.save_config_low().await?;
-    //     tokio::fs::copy(
-    //         "/etc/wpa_supplicant.conf",
-    //         self.datadir.join("wpa_supplicant.conf"),
-    //     )
-    //     .await?;
-    //     Ok(())
-    // }
+    pub async fn save_config(&mut self) -> Result<(), Error> {
+        // self.save_config_low().await?;
+        let _ = Command::new("rsync")
+            .arg("-rP")
+            .arg("--delete-after")
+            .arg("/etc/NetworkManager/system-connections")
+            .arg(&self.datadir)
+            .invoke(ErrorKind::Wifi)
+            .await?;
+        Ok(())
+    }
     pub async fn check_network(&self, ssid: &Ssid) -> Result<Option<NetworkId>, Error> {
         dbg!(Ok(self.list_networks_low().await?.remove(ssid)))
     }
@@ -603,7 +565,7 @@ impl WpaCli {
             )),
             Some(x) => {
                 self.select_network_low(&x).await?;
-                // self.save_config().await?;
+                self.save_config().await?;
                 let connect = async {
                     let mut current;
                     loop {
@@ -654,8 +616,7 @@ impl WpaCli {
             None => Ok(false),
             Some(x) => {
                 self.remove_network_low(x).await?;
-                // self.save_config().await?;
-                // self.reconfigure_low().await?;
+                self.save_config().await?;
                 Ok(true)
             }
         }
@@ -668,7 +629,7 @@ impl WpaCli {
         priority: isize,
     ) -> Result<(), Error> {
         self.set_network_low(&ssid, &psk).await?;
-        // self.save_config().await?;
+        self.save_config().await?;
         Ok(())
     }
 }
@@ -695,20 +656,21 @@ pub fn country_code_parse(code: &str, _matches: &ArgMatches<'_>) -> Result<Count
 
 #[instrument(skip(main_datadir))]
 pub async fn synchronize_wpa_supplicant_conf<P: AsRef<Path>>(main_datadir: P) -> Result<(), Error> {
-    let persistent = main_datadir.as_ref().join("wpa_supplicant.conf");
+    let persistent = main_datadir.as_ref().join("system-connections");
     tracing::debug!("persistent: {:?}", persistent);
     if tokio::fs::metadata(&persistent).await.is_err() {
-        tokio::fs::write(&persistent, include_str!("wpa_supplicant.conf.base")).await?;
+        return Ok(());
     }
-    let volatile = Path::new("/etc/wpa_supplicant.conf");
-    tracing::debug!("link: {:?}", volatile);
-    if tokio::fs::metadata(&volatile).await.is_ok() {
-        tokio::fs::remove_file(&volatile).await?
-    }
-    tokio::fs::copy(&persistent, volatile).await?;
+
+    let _ = Command::new("rsync")
+        .arg("-rP")
+        .arg(&persistent)
+        .arg("/etc/NetworkManager")
+        .invoke(ErrorKind::Wifi)
+        .await?;
     Command::new("systemctl")
         .arg("restart")
-        .arg("wpa_supplicant")
+        .arg("network-manager")
         .invoke(ErrorKind::Wifi)
         .await?;
     Command::new("ifconfig")
