@@ -36,7 +36,7 @@ jobs:
           echo "Platforms: ${{ steps.buildx.outputs.platforms }}"
           docker buildx create --use
           sudo apt install -y avahi-daemon
-          sudo snap install node
+          sudo snap install node --clasic
           sudo apt install -y npm
           sudo apt install -y jq
           sudo apt install git
