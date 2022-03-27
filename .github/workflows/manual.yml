@@ -6,15 +6,6 @@ name: Manual workflow
 # or API.
 on:
   workflow_dispatch:
-    # Inputs the workflow accepts.
-    inputs:
-      name:
-        # Friendly description to be shown in the UI instead of 'name'
-        description: 'Person to greet'
-        # Default value if no value is explicitly provided
-        default: 'World'
-        # Input has to be provided for the workflow to run
-        required: true
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 
@@ -25,10 +16,16 @@ jobs:
       -
         name: Checkout
         uses: actions/checkout@v2
+        
       -
         name: Set up Docker Buildx
         id: buildx
         uses: docker/setup-buildx-action@v1
+        
+      - 
+        name: Install Snapcraft
+        uses: samuelmeuli/action-snapcraft@v1
+        
       -
         name: Inspect builder
         run: |
@@ -38,3 +35,12 @@ jobs:
           echo "Flags:     ${{ steps.buildx.outputs.flags }}"
           echo "Platforms: ${{ steps.buildx.outputs.platforms }}"
           docker buildx create --use
+          apt install -y avahi-daemon
+          snap install node
+          apt install -y npm
+          apt install -y jq
+          apt install git
+          git clone --recursive https://github.com/Start9Labs/embassy-os.git
+          cd embassy-os
+          git submodule update --init --recursive
+          make
