@@ -35,11 +35,11 @@ jobs:
           echo "Flags:     ${{ steps.buildx.outputs.flags }}"
           echo "Platforms: ${{ steps.buildx.outputs.platforms }}"
           docker buildx create --use
-          apt install -y avahi-daemon
-          snap install node
-          apt install -y npm
-          apt install -y jq
-          apt install git
+          sudo apt install -y avahi-daemon
+          sudo snap install node
+          sudo apt install -y npm
+          sudo apt install -y jq
+          sudo apt install git
           git clone --recursive https://github.com/Start9Labs/embassy-os.git
           cd embassy-os
           git submodule update --init --recursive
