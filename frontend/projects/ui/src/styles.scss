@@ -1,3 +1,6 @@
+@import '~swiper/scss';
+@import '~@ionic/angular/css/ionic-swiper';
+
 @font-face {
   font-family: 'Montserrat';
   font-style: normal;
@@ -36,15 +39,15 @@
 @font-face {
   font-family: 'Open Sans';
   font-style: normal;
-  font-weight: 500;
-  src: url('/assets/fonts/Open_Sans/OpenSans-SemiBold.ttf');
+  font-weight: thin;
+  src: url('/assets/fonts/Open_Sans/OpenSans-Light.ttf');
 }
 
 @font-face {
-  font-family: 'Open Sans';
+  font-family: 'Redacted';
   font-style: normal;
-  font-weight: thin;
-  src: url('/assets/fonts/Open_Sans/OpenSans-Light.ttf');
+  font-weight: normal;
+  src: url('/assets/fonts/Redacted/redacted.regular.ttf');
 }
 
 /** Ionic CSS Variables overrides **/
@@ -58,8 +61,18 @@
 
 $subheader-height: 48px;
 
+.swiper {
+  .swiper-slide {
+    display: unset;
+  }
+}
+
+.btn-128 {
+  min-width: 128px;
+}
+
 .subheader-padding {
-  --padding-top: #{$subheader-height} + 10px;
+  --padding-top: #{$subheader-height}+10px;
 }
 
 .subheader {
@@ -70,10 +83,6 @@ $subheader-height: 48px;
   color: var(--ion-color-warning);
 }
 
-.wide-alert {
-  --min-width: 400px;
-}
-
 .break-all {
   word-break: break-all;
 }
@@ -81,25 +90,12 @@ $subheader-height: 48px;
 .input-label {
   margin-bottom: 6px;
   font-size: medium;
-  font-weight: 500;
+  font-weight: bold;
+
   * {
     display: inline-block;
     vertical-align: middle;
   }
-}
-
-.item-subdivider {
-  padding: 0 16px;
-  margin-top: 0;
-}
-
-.loader {
-  --spinner-color: var(--ion-color-warning) !important;
-  z-index: 40000 !important;
-}
-
-.borderless {
-  border-style: none;
 }
 
 .center {
@@ -217,20 +213,27 @@ ion-button {
   }
 }
 
+.alert-warning-message {
+  .alert-title {
+    color: var(--ion-color-warning);
+  }
+}
+
 .alert-success-message {
   .alert-title {
     color: var(--ion-color-success);
   }
 }
 
-.wider-alert .alert-wrapper {
-  min-width: 60% !important;
-}
+.notification-detail-alert {
+  .alert-wrapper {
+    --max-height: 80% !important;
+    --width: 90% !important;
+    --max-width: 900px !important;
+  }
 
-ion-slides {
-  .slider-wrapper {
-    height: 100%;
-    width: 100%;
+  .alert-message {
+    max-height: unset;
   }
 }
 
@@ -251,6 +254,7 @@ ion-item-divider {
 
 ion-item {
   border-radius: 6px;
+  --ripple-color: transparent;
 }
 
 ion-label {
@@ -258,7 +262,8 @@ ion-label {
 }
 
 ion-loading {
-  z-index: 100 !important;
+  --spinner-color: var(--ion-color-warning) !important;
+  z-index: 40000 !important;
 }
 
 .swiper-pagination {
@@ -286,12 +291,15 @@ h2 {
   25% {
     content: '';
   }
+
   50% {
     content: '.';
   }
+
   75% {
     content: '..';
   }
+
   100% {
     content: '...';
   }
@@ -301,16 +309,20 @@ h2 {
   0% {
     opacity: 1;
   }
+
   20% {
     opacity: 0;
   }
+
   60% {
     opacity: 0;
   }
+
   100% {
     opacity: 1;
   }
 }
+
 .fader {
   animation: flickerAnimation 4s infinite;
 }

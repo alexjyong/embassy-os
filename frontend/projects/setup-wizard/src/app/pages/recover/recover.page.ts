@@ -31,7 +31,7 @@ export class RecoverPage {
     private readonly alertCtrl: AlertController,
     private readonly loadingCtrl: LoadingController,
     private readonly errorToastService: ErrorToastService,
-    public readonly stateService: StateService,
+    private readonly stateService: StateService,
   ) {}
 
   async ngOnInit() {
@@ -68,8 +68,8 @@ export class RecoverPage {
               'embassy-os': p['embassy-os'],
             }
             this.mappedDrives.push({
-              hasValidBackup: p['embassy-os']?.full,
-              is02x: drive['embassy-os']?.version.startsWith('0.2'),
+              hasValidBackup: !!p['embassy-os']?.full,
+              is02x: !!drive['embassy-os']?.version.startsWith('0.2'),
               drive,
             })
           })
@@ -99,9 +99,12 @@ export class RecoverPage {
         const alert = await this.alertCtrl.create({
           header: 'Embassy Data Drive Detected',
           message: new IonicSafeString(
-            `${importableDrive.vendor || 'Unknown Vendor'} - ${
+            `<strong>${importableDrive.vendor || 'Unknown Vendor'} - ${
               importableDrive.model || 'Unknown Model'
-            } contains Embassy data. To use this drive and its data <i>as-is</i>, click "Use Drive". This will complete the setup process.<br /><br /><b>Important</b>. If you are trying to restore from backup or update from 0.2.x, DO NOT click "Use Drive". Instead, click "Cancel" and follow instructions.`,
+            }</strong> contains Embassy data.
+            <p>To use this drive and its data, select <strong>"USE DRIVE"</strong>. This will complete the setup process.
+            <p><strong style="color:red">Important!</strong><br><br>
+            If you are trying to restore from a backup or update from 0.2.x, <strong>DO NOT</strong> select "USE DRIVE". Instead, select <strong>"CANCEL"</strong> and follow instructions.`,
           ),
           buttons: [
             {
@@ -111,7 +114,16 @@ export class RecoverPage {
             {
               text: 'Use Drive',
               handler: async () => {
-                await this.importDrive(importableDrive.guid)
+                const modal = await this.modalController.create({
+                  component: PasswordPage,
+                  componentProps: { storageDrive: importableDrive },
+                })
+                modal.onDidDismiss().then(res => {
+                  if (res.data && res.data.password) {
+                    this.importDrive(importableDrive.guid!, res.data.password)
+                  }
+                })
+                await modal.present()
               },
             },
           ],
@@ -119,7 +131,7 @@ export class RecoverPage {
         await alert.present()
         this.hasShownGuidAlert = true
       }
-    } catch (e) {
+    } catch (e: any) {
       this.errorToastService.present(e)
     } finally {
       this.loading = false
@@ -148,11 +160,14 @@ export class RecoverPage {
   }
 
   async select(target: DiskBackupTarget) {
-    const is02x = target['embassy-os'].version.startsWith('0.2')
+    const is02x = target['embassy-os']?.version.startsWith('0.2')
+    const { logicalname } = target
+
+    if (!logicalname) return
 
     if (this.stateService.hasProductKey) {
       if (is02x) {
-        this.selectRecoverySource(target.logicalname)
+        this.selectRecoverySource(logicalname)
       } else {
         const modal = await this.modalController.create({
           component: PasswordPage,
@@ -160,8 +175,8 @@ export class RecoverPage {
           cssClass: 'alertlike-modal',
         })
         modal.onDidDismiss().then(res => {
-          if (res.data && res.data.password) {
-            this.selectRecoverySource(target.logicalname, res.data.password)
+          if (res.data?.password) {
+            this.selectRecoverySource(logicalname, res.data.password)
           }
         })
         await modal.present()
@@ -188,8 +203,8 @@ export class RecoverPage {
           cssClass: 'alertlike-modal',
         })
         modal.onDidDismiss().then(res => {
-          if (res.data && res.data.productKey) {
-            this.selectRecoverySource(target.logicalname)
+          if (res.data?.productKey) {
+            this.selectRecoverySource(logicalname)
           }
         })
         await modal.present()
@@ -197,15 +212,15 @@ export class RecoverPage {
     }
   }
 
-  private async importDrive(guid: string) {
+  private async importDrive(guid: string, password: string) {
     const loader = await this.loadingCtrl.create({
       message: 'Importing Drive',
     })
     await loader.present()
     try {
-      await this.stateService.importDrive(guid)
+      await this.stateService.importDrive(guid, password)
       await this.navCtrl.navigateForward(`/success`)
-    } catch (e) {
+    } catch (e: any) {
       this.errorToastService.present(e)
     } finally {
       loader.dismiss()
@@ -228,8 +243,8 @@ export class RecoverPage {
   styleUrls: ['./recover.page.scss'],
 })
 export class DriveStatusComponent {
-  @Input() hasValidBackup: boolean
-  @Input() is02x: boolean
+  @Input() hasValidBackup!: boolean
+  @Input() is02x!: boolean
 }
 
 interface MappedDisk {

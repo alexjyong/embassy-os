@@ -8,21 +8,16 @@ import {
 import {
   InterfaceDef,
   PackageDataEntry,
+  PackageState,
   Status,
 } from 'src/app/services/patch-db/data-model'
 import { ErrorToastService } from '@start9labs/shared'
-import { PackageState } from 'src/app/types/package-state'
-import { wizardModal } from 'src/app/components/install-wizard/install-wizard.component'
-import {
-  AlertController,
-  LoadingController,
-  ModalController,
-} from '@ionic/angular'
+import { AlertController, LoadingController } from '@ionic/angular'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { WizardBaker } from 'src/app/components/install-wizard/prebaked-wizards'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 import { ModalService } from 'src/app/services/modal.service'
 import { DependencyInfo } from '../../pipes/to-dependencies.pipe'
+import { hasCurrentDeps } from 'src/app/util/has-deps'
+import { ConnectionService } from 'src/app/services/connection.service'
 
 @Component({
   selector: 'app-show-status',
@@ -32,41 +27,38 @@ import { DependencyInfo } from '../../pipes/to-dependencies.pipe'
 })
 export class AppShowStatusComponent {
   @Input()
-  pkg: PackageDataEntry
+  pkg!: PackageDataEntry
 
   @Input()
-  connectionFailure = false
-
-  @Input()
-  status: PackageStatus
+  status!: PackageStatus
 
   @Input()
   dependencies: DependencyInfo[] = []
 
   PR = PrimaryRendering
 
+  disconnected$ = this.connectionService.watchDisconnected$()
+
   constructor(
     private readonly alertCtrl: AlertController,
     private readonly errToast: ErrorToastService,
     private readonly loadingCtrl: LoadingController,
-    private readonly modalCtrl: ModalController,
     private readonly embassyApi: ApiService,
-    private readonly wizardBaker: WizardBaker,
-    private readonly patch: PatchDbService,
     private readonly launcherService: UiLauncherService,
     private readonly modalService: ModalService,
+    private readonly connectionService: ConnectionService,
   ) {}
 
   get interfaces(): Record<string, InterfaceDef> {
-    return this.pkg.manifest.interfaces
+    return this.pkg.manifest.interfaces || {}
   }
 
-  get pkgStatus(): Status {
-    return this.pkg.installed.status
+  get pkgStatus(): Status | null {
+    return this.pkg.installed?.status || null
   }
 
   get isInstalled(): boolean {
-    return this.pkg.state === PackageState.Installed && !this.connectionFailure
+    return this.pkg.state === PackageState.Installed
   }
 
   get isRunning(): boolean {
@@ -74,9 +66,7 @@ export class AppShowStatusComponent {
   }
 
   get isStopped(): boolean {
-    return (
-      this.status.primary === PrimaryStatus.Stopped && this.pkgStatus.configured
-    )
+    return this.status.primary === PrimaryStatus.Stopped
   }
 
   launchUi(): void {
@@ -84,7 +74,9 @@ export class AppShowStatusComponent {
   }
 
   async presentModalConfig(): Promise<void> {
-    return this.modalService.presentModalConfig({ pkgId: this.pkg.manifest.id })
+    return this.modalService.presentModalConfig({
+      pkgId: this.id,
+    })
   }
 
   async tryStart(): Promise<void> {
@@ -97,7 +89,7 @@ export class AppShowStatusComponent {
 
     const alertMsg = this.pkg.manifest.alerts.start
 
-    if (!!alertMsg) {
+    if (alertMsg) {
       const proceed = await this.presentAlertStart(alertMsg)
 
       if (!proceed) return
@@ -106,60 +98,142 @@ export class AppShowStatusComponent {
     this.start()
   }
 
-  async stop(): Promise<void> {
-    const { id, title, version } = this.pkg.manifest
-    const hasDependents = !!Object.keys(
-      this.pkg.installed['current-dependents'],
-    ).filter(depId => depId !== id).length
+  async tryStop(): Promise<void> {
+    const { title, alerts } = this.pkg.manifest
 
-    if (!hasDependents) {
-      const loader = await this.loadingCtrl.create({
-        message: `Stopping...`,
-        spinner: 'lines',
-        cssClass: 'loader',
-      })
-      await loader.present()
-
-      try {
-        await this.embassyApi.stopPackage({ id })
-      } catch (e) {
-        this.errToast.present(e)
-      } finally {
-        loader.dismiss()
-      }
-    } else {
-      wizardModal(
-        this.modalCtrl,
-        this.wizardBaker.stop({
-          id,
-          title,
-          version,
-        }),
-      )
+    let message = alerts.stop || ''
+    if (hasCurrentDeps(this.pkg)) {
+      const depMessage = `Services that depend on ${title} will no longer work properly and may crash`
+      message = message ? `${message}.\n\n${depMessage}` : depMessage
     }
+
+    if (message) {
+      const alert = await this.alertCtrl.create({
+        header: 'Warning',
+        message,
+        buttons: [
+          {
+            text: 'Cancel',
+            role: 'cancel',
+          },
+          {
+            text: 'Stop',
+            handler: () => {
+              this.stop()
+            },
+            cssClass: 'enter-click',
+          },
+        ],
+        cssClass: 'alert-warning-message',
+      })
+
+      await alert.present()
+    } else {
+      this.stop()
+    }
+  }
+
+  async tryRestart(): Promise<void> {
+    if (hasCurrentDeps(this.pkg)) {
+      const alert = await this.alertCtrl.create({
+        header: 'Warning',
+        message: `Services that depend on ${this.pkg.manifest.title} may temporarily experiences issues`,
+        buttons: [
+          {
+            text: 'Cancel',
+            role: 'cancel',
+          },
+          {
+            text: 'Restart',
+            handler: () => {
+              this.restart()
+            },
+            cssClass: 'enter-click',
+          },
+        ],
+        cssClass: 'alert-warning-message',
+      })
+
+      await alert.present()
+    } else {
+      this.restart()
+    }
+  }
+
+  async presentAlertRestart(): Promise<void> {
+    const alert = await this.alertCtrl.create({
+      header: 'Confirm',
+      message: 'Are you sure you want to restart this service?',
+      buttons: [
+        {
+          text: 'Cancel',
+          role: 'cancel',
+        },
+        {
+          text: 'Restart',
+          handler: () => {
+            this.restart()
+          },
+          cssClass: 'enter-click',
+        },
+      ],
+    })
+
+    await alert.present()
+  }
+
+  private get id(): string {
+    return this.pkg.manifest.id
   }
 
   private async start(): Promise<void> {
     const loader = await this.loadingCtrl.create({
       message: `Starting...`,
-      spinner: 'lines',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
-      await this.embassyApi.startPackage({ id: this.pkg.manifest.id })
-    } catch (e) {
+      await this.embassyApi.startPackage({ id: this.id })
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
     }
   }
 
+  private async stop(): Promise<void> {
+    const loader = await this.loadingCtrl.create({
+      message: 'Stopping...',
+    })
+    await loader.present()
+
+    try {
+      await this.embassyApi.stopPackage({ id: this.id })
+    } catch (e: any) {
+      this.errToast.present(e)
+    } finally {
+      loader.dismiss()
+    }
+  }
+
+  private async restart(): Promise<void> {
+    const loader = await this.loadingCtrl.create({
+      message: `Restarting...`,
+    })
+    await loader.present()
+
+    try {
+      await this.embassyApi.restartPackage({ id: this.id })
+    } catch (e: any) {
+      this.errToast.present(e)
+    } finally {
+      loader.dismiss()
+    }
+  }
   private async presentAlertStart(message: string): Promise<boolean> {
     return new Promise(async resolve => {
       const alert = await this.alertCtrl.create({
-        header: 'Warning',
+        header: 'Alert',
         message,
         buttons: [
           {

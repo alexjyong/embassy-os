@@ -5,7 +5,7 @@ use super::*;
 
 const V0_3_0: emver::Version = emver::Version::new(0, 3, 0, 0);
 lazy_static! {
-    static ref V0_3_0_COMPAT: VersionRange = VersionRange::Conj(
+    pub static ref V0_3_0_COMPAT: VersionRange = VersionRange::Conj(
         Box::new(VersionRange::Anchor(
             emver::GTE,
             emver::Version::new(0, 3, 0, 0),
@@ -14,6 +14,7 @@ lazy_static! {
     );
 }
 
+#[derive(Debug, Clone)]
 pub struct Version;
 #[async_trait]
 impl VersionT for Version {

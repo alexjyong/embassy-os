@@ -2,10 +2,13 @@
  * Public API Surface of @start9labs/shared
  */
 
+export * from './classes/http-error'
+export * from './classes/rpc-error'
+
 export * from './components/markdown/markdown.component'
-export * from './components/markdown/markdown.module'
-export * from './components/text-spinner/text-spinner.component.module'
+export * from './components/markdown/markdown.component.module'
 export * from './components/text-spinner/text-spinner.component'
+export * from './components/text-spinner/text-spinner.component.module'
 
 export * from './directives/element/element.directive'
 export * from './directives/element/element.module'
@@ -23,13 +26,19 @@ export * from './pipes/shared/trust.pipe'
 export * from './pipes/unit-conversion/unit-conversion.module'
 export * from './pipes/unit-conversion/unit-conversion.pipe'
 
-export * from './services/api.service'
 export * from './services/destroy.service'
+export * from './services/download-html.service'
 export * from './services/emver.service'
 export * from './services/error-toast.service'
+export * from './services/http.service'
 
+export * from './types/api'
+export * from './types/rpc-error-details'
 export * from './types/url'
 export * from './types/workspace-config'
 
+export * from './util/copy-to-clipboard'
+export * from './util/get-pkg-id'
 export * from './util/misc.util'
+export * from './util/to-local-iso-string'
 export * from './util/unused'

@@ -1,5 +1,5 @@
 import { Component, Input } from '@angular/core'
-import { FormGroup } from '@angular/forms'
+import { UntypedFormGroup } from '@angular/forms'
 import { ModalController } from '@ionic/angular'
 import {
   convertValuesRecursive,
@@ -19,12 +19,13 @@ export interface ActionButton {
   styleUrls: ['./generic-form.page.scss'],
 })
 export class GenericFormPage {
-  @Input() title: string
-  @Input() spec: ConfigSpec
-  @Input() buttons: ActionButton[]
+  @Input() title!: string
+  @Input() spec!: ConfigSpec
+  @Input() buttons!: ActionButton[]
   @Input() initialValue: object = {}
-  submitBtn: ActionButton
-  formGroup: FormGroup
+
+  submitBtn!: ActionButton
+  formGroup!: UntypedFormGroup
 
   constructor(
     private readonly modalCtrl: ModalController,
@@ -50,7 +51,7 @@ export class GenericFormPage {
       this.formGroup.markAllAsTouched()
       document
         .getElementsByClassName('validation-error')[0]
-        .parentElement.parentElement.scrollIntoView({ behavior: 'smooth' })
+        ?.scrollIntoView({ behavior: 'smooth' })
       return
     }
 

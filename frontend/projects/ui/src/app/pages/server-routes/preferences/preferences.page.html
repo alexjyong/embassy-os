@@ -8,23 +8,27 @@
 </ion-header>
 
 <ion-content class="ion-padding-top">
-  <ion-item-group *ngIf="patch.data['server-info'] as server">
-    <ion-item-divider>General</ion-item-divider>
-    <ion-item button (click)="presentModalName()">
-      <ion-label>Device Name</ion-label>
-      <ion-note slot="end">{{ patch.data.ui.name || defaultName }}</ion-note>
-    </ion-item>
-
-    <ion-item-divider>Marketplace</ion-item-divider>
-    <ion-item
-      button
-      (click)="serverConfig.presentAlert('auto-check-updates', patch.data.ui['auto-check-updates'] !== false)"
-    >
-      <ion-label>Auto Check for Updates</ion-label>
-      <ion-note slot="end"
-        >{{ patch.data.ui['auto-check-updates'] !== false ? 'Enabled' :
-        'Disabled' }}</ion-note
+  <ng-container *ngIf="ui$ | async as ui">
+    <ion-item-group *ngIf="server$ | async as server">
+      <ion-item-divider>General</ion-item-divider>
+      <ion-item
+        button
+        (click)="presentModalName('Embassy-' + server.id, ui.name)"
       >
-    </ion-item>
-  </ion-item-group>
+        <ion-label>Device Name</ion-label>
+        <ion-note slot="end">{{ ui.name || 'Embassy-' + server.id }}</ion-note>
+      </ion-item>
+
+      <ion-item-divider>Marketplace</ion-item-divider>
+      <ion-item
+        button
+        (click)="serverConfig.presentAlert('auto-check-updates', ui['auto-check-updates'] !== false)"
+      >
+        <ion-label>Auto Check for Updates</ion-label>
+        <ion-note slot="end">
+          {{ ui['auto-check-updates'] !== false ? 'Enabled' : 'Disabled' }}
+        </ion-note>
+      </ion-item>
+    </ion-item-group>
+  </ng-container>
 </ion-content>

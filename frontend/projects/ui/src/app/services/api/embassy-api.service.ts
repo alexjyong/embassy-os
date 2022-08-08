@@ -1,4 +1,3 @@
-import { AbstractApiService } from '@start9labs/shared'
 import { Subject, Observable } from 'rxjs'
 import {
   Http,
@@ -11,13 +10,11 @@ import {
 } from 'patch-db-client'
 import { RR } from './api.types'
 import { DataModel } from 'src/app/services/patch-db/data-model'
-import { RequestError } from '../http.service'
+import { Log, RequestError } from '@start9labs/shared'
 import { map } from 'rxjs/operators'
+import { WebSocketSubjectConfig } from 'rxjs/webSocket'
 
-export abstract class ApiService
-  extends AbstractApiService
-  implements Source<DataModel>, Http<DataModel>
-{
+export abstract class ApiService implements Source<DataModel>, Http<DataModel> {
   protected readonly sync$ = new Subject<Update<DataModel>>()
 
   /** PatchDb Source interface. Post/Patch requests provide a source of patches to the db. */
@@ -27,6 +24,20 @@ export abstract class ApiService
       .asObservable()
       .pipe(map(result => ({ result, jsonrpc: '2.0' })))
   }
+
+  // websocket
+
+  abstract openLogsWebsocket$(
+    config: WebSocketSubjectConfig<Log>,
+  ): Observable<Log>
+
+  // http
+
+  // for getting static files: ex icons, instructions, licenses
+  abstract getStatic(url: string): Promise<string>
+
+  // for sideloading packages
+  abstract uploadPackage(guid: string, body: ArrayBuffer): Promise<string>
 
   // db
 
@@ -60,6 +71,14 @@ export abstract class ApiService
     params: RR.GetServerLogsReq,
   ): Promise<RR.GetServerLogsRes>
 
+  abstract followServerLogs(
+    params: RR.FollowServerLogsReq,
+  ): Promise<RR.FollowServerLogsRes>
+
+  abstract followKernelLogs(
+    params: RR.FollowServerLogsReq,
+  ): Promise<RR.FollowServerLogsRes>
+
   abstract getServerMetrics(
     params: RR.GetServerMetricsReq,
   ): Promise<RR.GetServerMetricsRes>
@@ -76,7 +95,7 @@ export abstract class ApiService
   async updateServerWrapper(params: RR.UpdateServerReq) {
     const res = await this.updateServerRaw(params)
     if (res.response === 'no-updates') {
-      throw new Error('Could ont find a newer version of EmbassyOS')
+      throw new Error('Could not find a newer version of EmbassyOS')
     }
     return res
   }
@@ -92,6 +111,8 @@ export abstract class ApiService
   abstract systemRebuild(
     params: RR.SystemRebuildReq,
   ): Promise<RR.SystemRebuildRes>
+
+  abstract repairDisk(params: RR.SystemRebuildReq): Promise<RR.SystemRebuildRes>
 
   // marketplace URLs
 
@@ -189,6 +210,10 @@ export abstract class ApiService
     params: RR.GetPackageLogsReq,
   ): Promise<RR.GetPackageLogsRes>
 
+  abstract followPackageLogs(
+    params: RR.FollowPackageLogsReq,
+  ): Promise<RR.FollowPackageLogsRes>
+
   protected abstract installPackageRaw(
     params: RR.InstallPackageReq,
   ): Promise<RR.InstallPackageRes>
@@ -229,19 +254,17 @@ export abstract class ApiService
   startPackage = (params: RR.StartPackageReq) =>
     this.syncResponse(() => this.startPackageRaw(params))()
 
-  abstract dryStopPackage(
-    params: RR.DryStopPackageReq,
-  ): Promise<RR.DryStopPackageRes>
+  protected abstract restartPackageRaw(
+    params: RR.RestartPackageReq,
+  ): Promise<RR.RestartPackageRes>
+  restartPackage = (params: RR.RestartPackageReq) =>
+    this.syncResponse(() => this.restartPackageRaw(params))()
 
   protected abstract stopPackageRaw(
     params: RR.StopPackageReq,
   ): Promise<RR.StopPackageRes>
   stopPackage = (params: RR.StopPackageReq) =>
     this.syncResponse(() => this.stopPackageRaw(params))()
-
-  abstract dryUninstallPackage(
-    params: RR.DryUninstallPackageReq,
-  ): Promise<RR.DryUninstallPackageRes>
 
   protected abstract uninstallPackageRaw(
     params: RR.UninstallPackageReq,
@@ -259,13 +282,17 @@ export abstract class ApiService
   deleteRecoveredPackage = (params: RR.UninstallPackageReq) =>
     this.syncResponse(() => this.deleteRecoveredPackageRaw(params))()
 
+  abstract sideloadPackage(
+    params: RR.SideloadPackageReq,
+  ): Promise<RR.SideloadPacakgeRes>
+
   // Helper allowing quick decoration to sync the response patch and return the response contents.
   // Pass in a tempUpdate function which returns a UpdateTemp corresponding to a temporary
   // state change you'd like to enact prior to request and expired when request terminates.
   private syncResponse<
     T,
     F extends (...args: any[]) => Promise<{ response: T; revision?: Revision }>,
-  >(f: F, temp?: Operation): (...args: Parameters<F>) => Promise<T> {
+  >(f: F, temp?: Operation<unknown>): (...args: Parameters<F>) => Promise<T> {
     return (...a) => {
       // let expireId = undefined
       // if (temp) {
@@ -274,7 +301,7 @@ export abstract class ApiService
       // }
 
       return f(a)
-        .catch((e: RequestError) => {
+        .catch((e: UIRequestError) => {
           if (e.revision) this.sync$.next(e.revision)
           throw e
         })
@@ -285,3 +312,5 @@ export abstract class ApiService
     }
   }
 }
+
+type UIRequestError = RequestError & { revision: Revision }

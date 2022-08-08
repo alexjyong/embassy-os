@@ -30,7 +30,9 @@ use crate::disk::mount::filesystem::{FileSystem, ReadWrite};
 use crate::disk::mount::guard::TmpMountGuard;
 use crate::disk::BOOT_RW_PATH;
 use crate::notifications::NotificationLevel;
-use crate::sound::{BEP, UPDATE_FAILED_1, UPDATE_FAILED_2, UPDATE_FAILED_3, UPDATE_FAILED_4};
+use crate::sound::{
+    CIRCLE_OF_5THS_SHORT, UPDATE_FAILED_1, UPDATE_FAILED_2, UPDATE_FAILED_3, UPDATE_FAILED_4,
+};
 use crate::update::latest_information::LatestInformation;
 use crate::util::Invoke;
 use crate::version::{Current, VersionT};
@@ -74,7 +76,7 @@ pub enum UpdateResult {
     Updating,
 }
 
-fn display_update_result(status: WithRevision<UpdateResult>, _: &ArgMatches<'_>) {
+fn display_update_result(status: WithRevision<UpdateResult>, _: &ArgMatches) {
     match status.response {
         UpdateResult::Updating => {
             println!("Updating...");
@@ -88,40 +90,40 @@ fn display_update_result(status: WithRevision<UpdateResult>, _: &ArgMatches<'_>)
 const HEADER_KEY: &str = "x-eos-hash";
 
 #[derive(Debug, Clone, Copy)]
-enum WritableDrives {
+pub enum WritableDrives {
     Green,
     Blue,
 }
 impl WritableDrives {
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::Green => "green",
             Self::Blue => "blue",
         }
     }
-    fn block_dev(&self) -> &'static Path {
+    pub fn block_dev(&self) -> &'static Path {
         Path::new(match self {
             Self::Green => "/dev/mmcblk0p3",
             Self::Blue => "/dev/mmcblk0p4",
         })
     }
-    fn part_uuid(&self) -> &'static str {
+    pub fn part_uuid(&self) -> &'static str {
         match self {
             Self::Green => "cb15ae4d-03",
             Self::Blue => "cb15ae4d-04",
         }
     }
-    fn as_fs(&self) -> impl FileSystem {
+    pub fn as_fs(&self) -> impl FileSystem {
         BlockDev::new(self.block_dev())
     }
 }
 
 /// This will be where we are going to be putting the new update
 #[derive(Debug, Clone, Copy)]
-struct NewLabel(WritableDrives);
+pub struct NewLabel(pub WritableDrives);
 
 /// This is our current label where the os is running
-struct CurrentLabel(WritableDrives);
+pub struct CurrentLabel(pub WritableDrives);
 
 lazy_static! {
     static ref PARSE_COLOR: Regex = Regex::new("LABEL=(\\w+)[ \t]+/").unwrap();
@@ -137,7 +139,7 @@ async fn maybe_do_update(
         "{}/eos/v0/latest?eos-version={}&arch={}",
         marketplace_url,
         Current::new().semver(),
-        platforms::TARGET_ARCH,
+        &*crate::ARCH,
     ))
     .await
     .with_kind(ErrorKind::Network)?
@@ -154,7 +156,7 @@ async fn maybe_do_update(
         .version()
         .get_mut(&mut db)
         .await?;
-    if &latest_version <= &current_version {
+    if &latest_version < &current_version {
         return Ok(None);
     }
     let mut tx = db.begin().await?;
@@ -204,9 +206,10 @@ async fn maybe_do_update(
             Ok(()) => {
                 status.updated = true;
                 status.save(&mut db).await.expect("could not save status");
-                BEP.play().await.expect("could not bep");
-                BEP.play().await.expect("could not bep");
-                BEP.play().await.expect("could not bep");
+                CIRCLE_OF_5THS_SHORT
+                    .play()
+                    .await
+                    .expect("could not play sound");
             }
             Err(e) => {
                 status.save(&mut db).await.expect("could not save status");
@@ -259,7 +262,7 @@ async fn do_update(
 }
 
 #[instrument]
-async fn query_mounted_label() -> Result<(NewLabel, CurrentLabel), Error> {
+pub async fn query_mounted_label() -> Result<(NewLabel, CurrentLabel), Error> {
     let output = tokio::fs::read_to_string("/etc/fstab")
         .await
         .with_ctx(|_| (crate::ErrorKind::Filesystem, "/etc/fstab"))?;
@@ -301,7 +304,7 @@ impl std::fmt::Display for EosUrl {
             self.base,
             self.version,
             Current::new().semver(),
-            platforms::TARGET_ARCH,
+            &*crate::ARCH,
         )
     }
 }
@@ -353,7 +356,12 @@ async fn write_stream_to_label<Db: DbHandle>(
     pin!(stream_download);
     let mut downloaded = 0;
     let mut last_progress_update = Instant::now();
-    while let Some(Ok(item)) = stream_download.next().await {
+    while let Some(item) = stream_download
+        .next()
+        .await
+        .transpose()
+        .with_kind(ErrorKind::Network)?
+    {
         file.write_all(&item)
             .await
             .with_kind(ErrorKind::Filesystem)?;
@@ -371,6 +379,7 @@ async fn write_stream_to_label<Db: DbHandle>(
     }
     file.flush().await.with_kind(ErrorKind::Filesystem)?;
     file.shutdown().await.with_kind(ErrorKind::Filesystem)?;
+    file.sync_all().await.with_kind(ErrorKind::Filesystem)?;
     drop(file);
     Ok(hasher.finalize().to_vec())
 }
@@ -445,7 +454,7 @@ async fn swap_boot_label(new_label: NewLabel) -> Result<(), Error> {
             new_label.0.label()
         ))
         .arg(mounted.as_ref().join("etc/fstab"))
-        .output()
+        .invoke(crate::ErrorKind::Filesystem)
         .await?;
     mounted.unmount().await?;
     Command::new("sed")
@@ -454,8 +463,17 @@ async fn swap_boot_label(new_label: NewLabel) -> Result<(), Error> {
             "s/PARTUUID=cb15ae4d-\\(03\\|04\\)/PARTUUID={}/g",
             new_label.0.part_uuid()
         ))
+        .arg(Path::new(BOOT_RW_PATH).join("cmdline.txt.orig"))
+        .invoke(crate::ErrorKind::Filesystem)
+        .await?;
+    Command::new("sed")
+        .arg("-i")
+        .arg(&format!(
+            "s/PARTUUID=cb15ae4d-\\(03\\|04\\)/PARTUUID={}/g",
+            new_label.0.part_uuid()
+        ))
         .arg(Path::new(BOOT_RW_PATH).join("cmdline.txt"))
-        .output()
+        .invoke(crate::ErrorKind::Filesystem)
         .await?;
 
     UPDATED.store(true, Ordering::SeqCst);

@@ -9,6 +9,8 @@
 - Avahi
 	- `sudo apt install -y avahi-daemon`
 	- Installed by default on most Debian systems - https://avahi.org
+- Build Essentials (needed to run `make`)
+	- `sudo apt install -y build-essential`
 - Docker
 	- `curl -fsSL https://get.docker.com | sh`
 	- https://docs.docker.com/get-docker
@@ -27,18 +29,20 @@
 - jq
 	- `sudo apt install -y jq`
 	- https://stedolan.github.io/jq
+- yq
+	- `sudo snap install yq`
+	- https://mikefarah.gitbook.io/yq
 
-2. Clone the repo, move into it, and bring in required submodules
-
+2. Clone the latest repo with required submodules
+   > :information_source: You chan check latest available version [here](https://github.com/Start9Labs/embassy-os/releases)
 	```
-	git clone --recursive https://github.com/Start9Labs/embassy-os.git
-	cd embassy-os
-	git submodule update --init --recursive
+	git clone --recursive https://github.com/Start9Labs/embassy-os.git --branch latest
 	```
 
 ## Build
 
 ```
+cd embassy-os
 make
 ```
 

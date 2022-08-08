@@ -15,6 +15,7 @@ use rpc_toolkit::Context;
 use serde::Deserialize;
 use tracing::instrument;
 
+use crate::util::config::{load_config_from_paths, local_config_path};
 use crate::ResultExt;
 
 #[derive(Debug, Default, Deserialize)]
@@ -23,6 +24,7 @@ pub struct CliContextConfig {
     pub bind_rpc: Option<SocketAddr>,
     pub host: Option<Url>,
     #[serde(deserialize_with = "crate::util::serde::deserialize_from_str_opt")]
+    #[serde(default)]
     pub proxy: Option<Url>,
     pub cookie_path: Option<PathBuf>,
 }
@@ -38,6 +40,10 @@ pub struct CliContextSeed {
 impl Drop for CliContextSeed {
     fn drop(&mut self) {
         let tmp = format!("{}.tmp", self.cookie_path.display());
+        let parent_dir = self.cookie_path.parent().unwrap_or(Path::new("/"));
+        if !parent_dir.exists() {
+            std::fs::create_dir_all(&parent_dir).unwrap();
+        }
         let mut writer = fd_lock_rs::FdLock::lock(
             File::create(&tmp).unwrap(),
             fd_lock_rs::LockType::Exclusive,
@@ -60,16 +66,16 @@ impl CliContext {
     /// BLOCKING
     #[instrument(skip(matches))]
     pub fn init(matches: &ArgMatches) -> Result<Self, crate::Error> {
-        let cfg_path = Path::new(matches.value_of("config").unwrap_or(crate::CONFIG_PATH));
-        let base = if cfg_path.exists() {
-            serde_yaml::from_reader(
-                File::open(cfg_path)
-                    .with_ctx(|_| (crate::ErrorKind::Filesystem, cfg_path.display().to_string()))?,
-            )
-            .with_kind(crate::ErrorKind::Deserialization)?
-        } else {
-            CliContextConfig::default()
-        };
+        let local_config_path = local_config_path();
+        let base: CliContextConfig = load_config_from_paths(
+            matches
+                .values_of("config")
+                .into_iter()
+                .flatten()
+                .map(|p| Path::new(p))
+                .chain(local_config_path.as_deref().into_iter())
+                .chain(std::iter::once(Path::new(crate::util::config::CONFIG_PATH))),
+        )?;
         let mut url = if let Some(host) = matches.value_of("host") {
             host.parse()?
         } else if let Some(host) = base.host {
@@ -88,7 +94,9 @@ impl CliContext {
         };
 
         let cookie_path = base.cookie_path.unwrap_or_else(|| {
-            cfg_path
+            local_config_path
+                .as_deref()
+                .unwrap_or_else(|| Path::new(crate::util::config::CONFIG_PATH))
                 .parent()
                 .unwrap_or(Path::new("/"))
                 .join(".cookies.json")
@@ -148,4 +156,14 @@ impl Context for CliContext {
     fn client(&self) -> &Client {
         &self.0.client
     }
+}
+/// When we had an empty proxy the system wasn't working like it used to, which allowed empty proxy
+#[test]
+fn test_cli_proxy_empty() {
+    serde_yaml::from_str::<CliContextConfig>(
+        "
+        bind_rpc:
+    ",
+    )
+    .unwrap();
 }

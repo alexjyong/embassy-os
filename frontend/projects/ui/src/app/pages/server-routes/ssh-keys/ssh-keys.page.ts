@@ -37,7 +37,7 @@ export class SSHKeysPage {
   async getKeys(): Promise<void> {
     try {
       this.sshKeys = await this.embassyApi.getSshKeys({})
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       this.loading = false
@@ -64,9 +64,7 @@ export class SSHKeysPage {
 
   async add(pubkey: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Saving...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -101,9 +99,7 @@ export class SSHKeysPage {
 
   async delete(i: number): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Deleting...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -111,7 +107,7 @@ export class SSHKeysPage {
       const entry = this.sshKeys[i]
       await this.embassyApi.deleteSshKey({ fingerprint: entry.fingerprint })
       this.sshKeys.splice(i, 1)
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -123,7 +119,7 @@ const sshSpec = {
   type: 'string',
   name: 'SSH Key',
   description:
-    'Enter the SSH public key of you would like to authorize for root access to your Embassy.',
+    'Enter the SSH public key you would like to authorize for root access to your Embassy.',
   nullable: false,
   masked: false,
   copyable: false,

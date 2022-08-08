@@ -32,7 +32,7 @@ pub fn tor() -> Result<(), Error> {
     Ok(())
 }
 
-fn display_services(services: Vec<OnionAddressV3>, matches: &ArgMatches<'_>) {
+fn display_services(services: Vec<OnionAddressV3>, matches: &ArgMatches) {
     use prettytable::*;
 
     if matches.is_present("format") {
@@ -351,7 +351,9 @@ impl TorControllerInner {
             .get_info("onions/current")
             .await?
             .lines()
-            .map(|l| l.trim().parse().with_kind(ErrorKind::Tor))
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.parse().with_kind(ErrorKind::Tor))
             .collect()
     }
 }

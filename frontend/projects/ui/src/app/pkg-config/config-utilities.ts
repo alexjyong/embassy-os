@@ -3,8 +3,8 @@ import { ValueSpec, DefaultString } from './config-types'
 export class Range {
   min?: number
   max?: number
-  minInclusive: boolean
-  maxInclusive: boolean
+  minInclusive!: boolean
+  maxInclusive!: boolean
 
   static from(s: string): Range {
     const r = new Range()
@@ -18,7 +18,7 @@ export class Range {
 
   checkIncludes(n: number) {
     if (
-      this.hasMin() !== undefined &&
+      this.hasMin() &&
       (this.min > n || (!this.minInclusive && this.min == n))
     ) {
       throw new Error(this.minMessage())
@@ -31,11 +31,11 @@ export class Range {
     }
   }
 
-  hasMin(): boolean {
+  hasMin(): this is Range & { min: number } {
     return this.min !== undefined
   }
 
-  hasMax(): boolean {
+  hasMax(): this is Range & { max: number } {
     return this.max !== undefined
   }
 

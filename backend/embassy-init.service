@@ -1,14 +1,16 @@
 [Unit]
 Description=Embassy Init
-After=network.target ntp.service
+After=network.target
 Requires=network.target
-Wants=avahi-daemon.service nginx.service tor.service ntp.service
+Wants=avahi-daemon.service nginx.service tor.service
 
 [Service]
 Type=oneshot
-Environment=RUST_LOG=embassy_init=debug,embassy=debug
+Environment=RUST_LOG=embassy_init=debug,embassy=debug,js_engine=debug
 ExecStart=/usr/local/bin/embassy-init
 RemainAfterExit=true
+StandardOutput=file:/var/log/embassy-init.out.log
+StandardError=file:/var/log/embassy-init.error.log
 
 [Install]
 WantedBy=embassyd.service

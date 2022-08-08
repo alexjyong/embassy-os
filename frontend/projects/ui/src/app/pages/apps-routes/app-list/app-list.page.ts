@@ -19,10 +19,12 @@ export class AppListPage {
   order: readonly string[] = []
   reordering = false
 
+  readonly connected$ = this.patch.connected$
+
   constructor(
     private readonly api: ApiService,
     private readonly destroy$: DestroyService,
-    public readonly patch: PatchDbService,
+    private readonly patch: PatchDbService,
   ) {}
 
   get empty(): boolean {

@@ -5,7 +5,9 @@ import { ConfigSpec } from 'src/app/pkg-config/config-types'
 import {
   DataModel,
   DependencyError,
+  Manifest,
 } from 'src/app/services/patch-db/data-model'
+import { LogsRes, ServerLogsReq } from '@start9labs/shared'
 
 export module RR {
   // DB
@@ -27,12 +29,14 @@ export module RR {
 
   // server
 
-  export type GetServerLogsReq = {
-    cursor?: string
-    before_flag?: boolean
-    limit?: number
-  }
+  export type GetServerLogsReq = ServerLogsReq // server.logs & server.kernel-logs
   export type GetServerLogsRes = LogsRes
+
+  export type FollowServerLogsReq = { limit?: number } // server.logs.follow & server.kernel-logs.follow
+  export type FollowServerLogsRes = {
+    'start-cursor': string
+    guid: string
+  }
 
   export type GetServerMetricsReq = {} // server.metrics
   export type GetServerMetricsRes = Metrics
@@ -147,6 +151,7 @@ export module RR {
   export type CreateBackupReq = WithExpire<{
     // backup.create
     'target-id': string
+    'package-ids': string[]
     'old-password': string | null
     password: string
   }>
@@ -158,19 +163,11 @@ export module RR {
   export type GetPackagePropertiesRes<T extends number> =
     PackagePropertiesVersioned<T>
 
-  export type LogsRes = {
-    entries: Log[]
-    'start-cursor'?: string
-    'end-cursor'?: string
-  }
-
-  export type GetPackageLogsReq = {
-    id: string
-    cursor?: string
-    before_flag?: boolean
-    limit?: number
-  } // package.logs
+  export type GetPackageLogsReq = ServerLogsReq & { id: string } // package.logs
   export type GetPackageLogsRes = LogsRes
+
+  export type FollowPackageLogsReq = FollowServerLogsReq & { id: string } // package.logs.follow
+  export type FollowPackageLogsRes = FollowServerLogsRes
 
   export type GetPackageMetricsReq = { id: string } // package.metrics
   export type GetPackageMetricsRes = Metric
@@ -214,14 +211,11 @@ export module RR {
   export type StartPackageReq = WithExpire<{ id: string }> // package.start
   export type StartPackageRes = WithRevision<null>
 
-  export type DryStopPackageReq = StopPackageReq // package.stop.dry
-  export type DryStopPackageRes = Breakages
+  export type RestartPackageReq = WithExpire<{ id: string }> // package.restart
+  export type RestartPackageRes = WithRevision<null>
 
   export type StopPackageReq = WithExpire<{ id: string }> // package.stop
   export type StopPackageRes = WithRevision<null>
-
-  export type DryUninstallPackageReq = UninstallPackageReq // package.uninstall.dry
-  export type DryUninstallPackageRes = Breakages
 
   export type UninstallPackageReq = WithExpire<{ id: string }> // package.uninstall
   export type UninstallPackageRes = WithRevision<null>
@@ -239,13 +233,20 @@ export module RR {
     spec: ConfigSpec
   }
 
+  export type SideloadPackageReq = {
+    manifest: Manifest
+    icon: string // base64
+  }
+  export type SideloadPacakgeRes = string //guid
+
   // marketplace
 
   export type GetMarketplaceDataReq = { 'server-id': string }
   export type GetMarketplaceDataRes = MarketplaceData
 
   export type GetMarketplaceEOSReq = {
-    'eos-version-compat': string
+    'server-id': string
+    'eos-version': string
   }
   export type GetMarketplaceEOSRes = MarketplaceEOS
 
@@ -265,7 +266,7 @@ export module RR {
 }
 
 export type WithExpire<T> = { 'expire-id'?: string } & T
-export type WithRevision<T> = { response: T; revision?: Revision }
+export type WithRevision<T> = { response: T | null; revision?: Revision }
 
 export interface MarketplaceEOS {
   version: string
@@ -280,11 +281,6 @@ export interface Breakages {
 export interface TaggedDependencyError {
   dependency: string
   error: DependencyError
-}
-
-export interface Log {
-  timestamp: string
-  message: string
 }
 
 export interface ActionResponse {
@@ -471,4 +467,19 @@ export interface AvailableWifi {
   ssid: string
   strength: number
   security: string[]
+}
+
+declare global {
+  type Stringified<T> = string & {
+    [P in keyof T]: T[P]
+  }
+
+  interface JSON {
+    stringify<T>(
+      value: T,
+      replacer?: (key: string, value: any) => any,
+      space?: string | number,
+    ): string & Stringified<T>
+    parse<T>(text: Stringified<T>, reviver?: (key: any, value: any) => any): T
+  }
 }

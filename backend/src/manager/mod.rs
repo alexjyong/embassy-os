@@ -19,13 +19,13 @@ use tokio::sync::{Notify, RwLock};
 use torut::onion::TorSecretKeyV3;
 use tracing::instrument;
 
-use crate::action::docker::DockerAction;
-use crate::action::{ActionImplementation, NoOutput};
 use crate::context::RpcContext;
 use crate::manager::sync::synchronizer;
 use crate::net::interface::InterfaceId;
 use crate::net::GeneratedCertificateMountPoint;
 use crate::notifications::NotificationLevel;
+use crate::procedure::docker::DockerProcedure;
+use crate::procedure::{NoOutput, PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::{Manifest, PackageId};
 use crate::status::MainStatus;
 use crate::util::{Container, NonDetachingJoinHandle, Version};
@@ -229,7 +229,10 @@ async fn run_main(
                     break;
                 }
             }
-            Err(bollard::errors::Error::DockerResponseNotFoundError { .. }) => (),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, // NOT FOUND
+                ..
+            }) => (),
             Err(e) => Err(e)?,
         }
         match futures::poll!(&mut runtime) {
@@ -293,6 +296,7 @@ async fn run_main(
         .net_controller
         .remove(
             &state.manifest.id,
+            ip,
             state.manifest.interfaces.0.keys().cloned(),
         )
         .await?;
@@ -312,7 +316,7 @@ async fn start_up_image(
             &rt_state.ctx,
             &rt_state.manifest.id,
             &rt_state.manifest.version,
-            None,
+            ProcedureName::Main,
             &rt_state.manifest.volumes,
             None,
             false,
@@ -333,7 +337,7 @@ impl Manager {
             ctx,
             status: AtomicUsize::new(Status::Stopped as usize),
             on_stop,
-            container_name: DockerAction::container_name(&manifest.id, None),
+            container_name: DockerProcedure::container_name(&manifest.id, None),
             manifest,
             tor_keys,
             synchronized: Notify::new(),
@@ -374,8 +378,13 @@ impl Manager {
             .or_else(|e| {
                 if matches!(
                     e,
-                    bollard::errors::Error::DockerResponseConflictError { .. }
-                        | bollard::errors::Error::DockerResponseNotFoundError { .. }
+                    bollard::errors::Error::DockerResponseServerError {
+                        status_code: 409, // CONFLICT
+                        ..
+                    } | bollard::errors::Error::DockerResponseServerError {
+                        status_code: 404, // NOT FOUND
+                        ..
+                    }
                 ) {
                     Ok(())
                 } else {
@@ -391,6 +400,11 @@ impl Manager {
             .commit_health_check_results
             .store(false, Ordering::SeqCst);
         let _ = self.shared.on_stop.send(OnStop::Exit);
+        let action = match &self.shared.manifest.main {
+            PackageProcedure::Docker(a) => a,
+            #[cfg(feature = "js_engine")]
+            PackageProcedure::Script(_) => return Ok(()),
+        };
         match self
             .shared
             .ctx
@@ -398,20 +412,27 @@ impl Manager {
             .stop_container(
                 &self.shared.container_name,
                 Some(StopContainerOptions {
-                    t: match &self.shared.manifest.main {
-                        ActionImplementation::Docker(a) => a,
-                    }
-                    .sigterm_timeout
-                    .map(|a| *a)
-                    .unwrap_or(Duration::from_secs(30))
-                    .as_secs_f64() as i64,
+                    t: action
+                        .sigterm_timeout
+                        .map(|a| *a)
+                        .unwrap_or(Duration::from_secs(30))
+                        .as_secs_f64() as i64,
                 }),
             )
             .await
         {
-            Err(bollard::errors::Error::DockerResponseNotFoundError { .. })
-            | Err(bollard::errors::Error::DockerResponseConflictError { .. })
-            | Err(bollard::errors::Error::DockerResponseNotModifiedError { .. }) => (), // Already stopped
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, // NOT FOUND
+                ..
+            })
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 409, // CONFLICT
+                ..
+            })
+            | Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 304, // NOT MODIFIED
+                ..
+            }) => (), // Already stopped
             a => a?,
         };
         self.shared.status.store(
@@ -542,26 +563,38 @@ async fn stop(shared: &ManagerSharedState) -> Result<(), Error> {
     ) {
         resume(shared).await?;
     }
+    let action = match &shared.manifest.main {
+        PackageProcedure::Docker(a) => a,
+        #[cfg(feature = "js_engine")]
+        PackageProcedure::Script(_) => return Ok(()),
+    };
     match shared
         .ctx
         .docker
         .stop_container(
             &shared.container_name,
             Some(StopContainerOptions {
-                t: match &shared.manifest.main {
-                    ActionImplementation::Docker(a) => a,
-                }
-                .sigterm_timeout
-                .map(|a| *a)
-                .unwrap_or(Duration::from_secs(30))
-                .as_secs_f64() as i64,
+                t: action
+                    .sigterm_timeout
+                    .map(|a| *a)
+                    .unwrap_or(Duration::from_secs(30))
+                    .as_secs_f64() as i64,
             }),
         )
         .await
     {
-        Err(bollard::errors::Error::DockerResponseNotFoundError { .. })
-        | Err(bollard::errors::Error::DockerResponseConflictError { .. })
-        | Err(bollard::errors::Error::DockerResponseNotModifiedError { .. }) => (), // Already stopped
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, // NOT FOUND
+            ..
+        })
+        | Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 409, // CONFLICT
+            ..
+        })
+        | Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 304, // NOT MODIFIED
+            ..
+        }) => (), // Already stopped
         a => a?,
     };
     shared.status.store(

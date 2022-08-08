@@ -1,4 +1,3 @@
-import { PackageState } from 'src/app/types/package-state'
 import {
   DataModel,
   DependencyErrorType,
@@ -6,29 +5,41 @@ import {
   HealthResult,
   Manifest,
   PackageMainStatus,
+  PackageState,
 } from 'src/app/services/patch-db/data-model'
 
 export const mockPatchData: DataModel = {
   ui: {
     name: `Matt's Embassy`,
-    'auto-check-updates': undefined,
+    'auto-check-updates': true,
     'pkg-order': [],
     'ack-welcome': '1.0.0',
-    marketplace: undefined,
-    dev: undefined,
-    gaming: undefined,
+    marketplace: {
+      'selected-id': '1234',
+      'known-hosts': {
+        '1234': {
+          name: 'Dark9',
+          url: 'https://test-marketplace.com',
+        },
+      },
+    },
   },
   'server-info': {
-    id: 'embassy-abcdefgh',
-    version: '0.3.0',
+    id: 'abcdefgh',
+    version: '0.3.1.1',
     'last-backup': null,
     'lan-address': 'https://embassy-abcdefgh.local',
     'tor-address': 'http://myveryownspecialtoraddress.onion',
     'unread-notification-count': 4,
+    // password is asdfasdf
     'password-hash':
       '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
-    'eos-version-compat': '>=0.3.0',
-    'status-info': null,
+    'eos-version-compat': '>=0.3.0 <=0.3.0.1',
+    'status-info': {
+      'backup-progress': null,
+      updated: false,
+      'update-progress': null,
+    },
   },
   'recovered-packages': {
     'btc-rpc-proxy': {
@@ -54,6 +65,14 @@ export const mockPatchData: DataModel = {
           long: 'Bitcoin is a decentralized consensus protocol and settlement network.',
         },
         'release-notes': 'Taproot, Schnorr, and more.',
+        assets: {
+          icon: 'icon.png',
+          license: 'LICENSE.md',
+          instructions: 'INSTRUCTIONS.md',
+          docker_images: 'image.tar',
+          assets: './assets',
+          scripts: './scripts',
+        },
         license: 'MIT',
         'wrapper-repo': 'https://github.com/start9labs/bitcoind-wrapper',
         'upstream-repo': 'https://github.com/bitcoin/bitcoin',
@@ -65,8 +84,8 @@ export const mockPatchData: DataModel = {
           uninstall:
             'Chain state will be lost, as will any funds stored on your Bitcoin Core waller that have not been backed up.',
           restore: null,
-          start: null,
-          stop: 'Stopping Bitcoin is bad for your health.',
+          start: 'Starting Bitcoin is good for your health.',
+          stop: null,
         },
         main: {
           type: 'docker',
@@ -207,8 +226,6 @@ export const mockPatchData: DataModel = {
                 nullable: true,
                 masked: false,
                 copyable: false,
-                pattern: null,
-                'pattern-description': null,
                 warning: 'You may loose all your money by providing your name.',
               },
               notifications: {
@@ -243,7 +260,6 @@ export const mockPatchData: DataModel = {
                 name: 'Top Speed',
                 description: 'The fastest you can possibly run.',
                 nullable: false,
-                default: null,
                 range: '[-1000, 1000]',
                 integral: false,
                 units: 'm/s',
@@ -252,7 +268,7 @@ export const mockPatchData: DataModel = {
                 name: 'Testnet',
                 type: 'boolean',
                 description:
-                  'determines whether your node is running on testnet or mainnet',
+                  '<ul><li>determines whether your node is running on testnet or mainnet</li></ul><script src="fake"></script>',
                 warning: 'Chain will have to resync!',
                 default: false,
               },
@@ -278,7 +294,6 @@ export const mockPatchData: DataModel = {
                   name: {
                     type: 'string',
                     name: 'Name',
-                    description: null,
                     nullable: false,
                     masked: false,
                     copyable: false,
@@ -288,7 +303,6 @@ export const mockPatchData: DataModel = {
                   email: {
                     type: 'string',
                     name: 'Email',
-                    description: null,
                     nullable: false,
                     masked: false,
                     copyable: true,
@@ -440,6 +454,14 @@ export const mockPatchData: DataModel = {
           long: 'More info about LND. More info about LND. More info about LND.',
         },
         'release-notes': 'Dual funded channels!',
+        assets: {
+          icon: 'icon.png',
+          license: 'LICENSE.md',
+          instructions: 'INSTRUCTIONS.md',
+          docker_images: 'image.tar',
+          assets: './assets',
+          scripts: './scripts',
+        },
         license: 'MIT',
         'wrapper-repo': 'https://github.com/start9labs/lnd-wrapper',
         'upstream-repo': 'https://github.com/lightningnetwork/lnd',

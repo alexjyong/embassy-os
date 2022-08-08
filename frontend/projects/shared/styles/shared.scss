@@ -1,5 +1,21 @@
+$wide-modal: 900px;
+$medium-modal: 600px;
+
+body {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
 ion-input {
   caret-color: gray;
+}
+
+ion-alert {
+  .alert-wrapper {
+    --min-width: 320px;
+  }
 }
 
 ion-modal::part(content) {
@@ -15,16 +31,6 @@ ion-modal::part(content) {
   box-shadow: 0 0 70px 70px black;
 }
 
-@media (min-width: 1000px) {
-  ion-modal::part(content) {
-    position: absolute;
-    height: 80% !important;
-    top: 10%;
-    width: 50% !important;
-    left: 25%;
-  }
-}
-
 .alertlike-modal {
   &::part(content) {
     max-height: 380px !important;
@@ -35,11 +41,48 @@ ion-modal::part(content) {
   }
 }
 
+.medium-modal {
+  &::part(content) {
+    position: absolute;
+    height: 80% !important;
+    top: 10%;
+    width: 90% !important;
+    left: 5% !important;
+  }
+}
+
 @media (min-width: 1000px) {
+  .medium-modal {
+    &::part(content) {
+      position: absolute;
+      height: 80% !important;
+      top: 10%;
+      width: $medium-modal !important;
+      left: calc((100vw - $medium-modal) / 2) !important;
+    }
+  }
+}
+
+@media (min-width: 1000px) {
+  ion-modal::part(content) {
+    position: absolute;
+    height: 80% !important;
+    top: 10%;
+    width: $wide-modal !important;
+    left: calc((100vw - $wide-modal) / 2) !important;
+  }
+
   .alertlike-modal {
     &::part(content) {
-      width: 60% !important;
-      left: 20% !important;
+      width: $wide-modal !important;
+      left: calc((100vw - $wide-modal) / 2) !important;
+    }
+  }
+
+  ion-alert {
+    .alert-wrapper {
+      --width: 50%;
+      --max-width: 500px;
     }
   }
 }
@@ -60,17 +103,17 @@ ion-modal::part(content) {
   }
 
   /* Hide scrollbar for IE, Edge and Firefox */
-  -ms-overflow-style: none; /* IE and Edge */
-  scrollbar-width: none; /* Firefox */
+  /* IE and Edge */
+  -ms-overflow-style: none;
+  /* Firefox */
+  scrollbar-width: none;
 }
 
 .divider {
-  background: linear-gradient(
-    90deg,
-    var(--ion-color-light) 0,
-    var(--ion-color-dark) 50%,
-    var(--ion-color-light) 100%
-  );
+  background: linear-gradient(90deg,
+      var(--ion-color-light) 0,
+      var(--ion-color-dark) 50%,
+      var(--ion-color-light) 100%);
   height: 1px;
 }
 
@@ -82,4 +125,20 @@ ion-modal::part(content) {
   animation: ellipsis-dot 1s infinite 0.3s;
   animation-fill-mode: forwards;
   width: 1em;
+}
+
+.courier-new {
+  font-family: 'Courier New';
+}
+
+.montserrat {
+  font-family: 'Montserrat', sans-serif !important;
+}
+
+.color-success-shade {
+  color: var(--ion-color-success-shade)
+}
+
+.color-primary-shade {
+  color: var(--ion-color-primary-shade)
 }

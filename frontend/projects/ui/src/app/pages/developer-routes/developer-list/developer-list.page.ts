@@ -28,7 +28,7 @@ import { takeUntil } from 'rxjs/operators'
   providers: [DestroyService],
 })
 export class DeveloperListPage {
-  devData: DevData
+  devData: DevData = {}
 
   constructor(
     private readonly modalCtrl: ModalController,
@@ -141,9 +141,7 @@ export class DeveloperListPage {
       return
 
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Creating Project...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -159,7 +157,7 @@ export class DeveloperListPage {
       } else {
         await this.api.setDbValue({ pointer: `/dev`, value: { [id]: def } })
       }
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -189,15 +187,13 @@ export class DeveloperListPage {
 
   async editName(id: string, newName: string) {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Saving...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       await this.api.setDbValue({ pointer: `/dev/${id}/name`, value: newName })
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -206,9 +202,7 @@ export class DeveloperListPage {
 
   async delete(id: string) {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Removing Project...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -216,7 +210,7 @@ export class DeveloperListPage {
       const devDataToSave: DevData = JSON.parse(JSON.stringify(this.devData))
       delete devDataToSave[id]
       await this.api.setDbValue({ pointer: `/dev`, value: devDataToSave })
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -234,9 +228,7 @@ const SAMPLE_CONFIG: ConfigSpec = {
     masked: false,
     copyable: false,
     // optional
-    warning: null,
     description: 'Example description for required string input.',
-    default: null,
     placeholder: 'Enter string value',
     pattern: '^[a-zA-Z0-9! _]+$',
     'pattern-description': 'Must be alphanumeric (may contain underscore).',
@@ -251,14 +243,12 @@ const SAMPLE_CONFIG: ConfigSpec = {
     warning: 'Example warning to display when changing this number value.',
     units: 'ms',
     description: 'Example description for optional number input.',
-    default: null,
     placeholder: 'Enter number value',
   },
   'sample-boolean': {
     type: 'boolean',
     name: 'Example Boolean Toggle',
     // optional
-    warning: null,
     description: 'Example description for boolean toggle',
     default: true,
   },

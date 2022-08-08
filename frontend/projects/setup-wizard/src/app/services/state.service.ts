@@ -11,26 +11,26 @@ import { pauseFor, ErrorToastService } from '@start9labs/shared'
   providedIn: 'root',
 })
 export class StateService {
-  hasProductKey: boolean
-  isMigrating: boolean
+  hasProductKey = false
+  isMigrating = false
 
   polling = false
   embassyLoaded = false
 
-  recoverySource: CifsRecoverySource | DiskRecoverySource
-  recoveryPassword: string
+  recoverySource?: CifsRecoverySource | DiskRecoverySource
+  recoveryPassword?: string
 
-  dataTransferProgress: {
+  dataTransferProgress?: {
     bytesTransferred: number
     totalBytes: number
     complete: boolean
-  } | null
+  }
   dataProgress = 0
   dataCompletionSubject = new BehaviorSubject(false)
 
-  torAddress: string
-  lanAddress: string
-  cert: string
+  torAddress = ''
+  lanAddress = ''
+  cert = ''
 
   constructor(
     private readonly apiService: ApiService,
@@ -49,7 +49,7 @@ export class StateService {
     let progress
     try {
       progress = await this.apiService.getRecoveryStatus()
-    } catch (e) {
+    } catch (e: any) {
       this.errorToastService.present({
         message: `${e.message}\n\nRestart Embassy to try again.`,
       })
@@ -69,8 +69,11 @@ export class StateService {
     setTimeout(() => this.pollDataTransferProgress(), 0) // prevent call stack from growing
   }
 
-  async importDrive(guid: string): Promise<void> {
-    const ret = await this.apiService.importDrive(guid)
+  async importDrive(guid: string, password: string): Promise<void> {
+    const ret = await this.apiService.importDrive({
+      guid,
+      'embassy-password': password,
+    })
     this.torAddress = ret['tor-address']
     this.lanAddress = ret['lan-address']
     this.cert = ret['root-ca']

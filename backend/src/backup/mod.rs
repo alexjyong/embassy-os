@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::eyre;
+use helpers::AtomicFile;
 use patch_db::{DbHandle, HasModel, LockType};
+use reqwest::Url;
 use rpc_toolkit::command;
 use serde::{Deserialize, Serialize};
 use sqlx::{Executor, Sqlite};
@@ -12,18 +14,18 @@ use tokio::io::AsyncWriteExt;
 use tracing::instrument;
 
 use self::target::PackageBackupInfo;
-use crate::action::{ActionImplementation, NoOutput};
 use crate::context::RpcContext;
 use crate::dependencies::reconfigure_dependents_with_live_pointers;
 use crate::id::ImageId;
 use crate::install::PKG_ARCHIVE_DIR;
 use crate::net::interface::{InterfaceId, Interfaces};
+use crate::procedure::{NoOutput, PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::util::serde::IoFormat;
-use crate::util::{AtomicFile, Version};
+use crate::util::Version;
 use crate::version::{Current, VersionT};
 use crate::volume::{backup_dir, Volume, VolumeId, Volumes, BACKUP_DIR};
-use crate::{Error, ResultExt};
+use crate::{Error, ErrorKind, ResultExt};
 
 pub mod backup_bulk;
 pub mod restore;
@@ -60,28 +62,35 @@ pub fn package_backup() -> Result<(), Error> {
 struct BackupMetadata {
     pub timestamp: DateTime<Utc>,
     pub tor_keys: BTreeMap<InterfaceId, String>,
+    pub marketplace_url: Option<Url>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, HasModel)]
 pub struct BackupActions {
-    pub create: ActionImplementation,
-    pub restore: ActionImplementation,
+    pub create: PackageProcedure,
+    pub restore: PackageProcedure,
 }
 impl BackupActions {
-    pub fn validate(&self, volumes: &Volumes, image_ids: &BTreeSet<ImageId>) -> Result<(), Error> {
+    pub fn validate(
+        &self,
+        eos_version: &Version,
+        volumes: &Volumes,
+        image_ids: &BTreeSet<ImageId>,
+    ) -> Result<(), Error> {
         self.create
-            .validate(volumes, image_ids, false)
+            .validate(eos_version, volumes, image_ids, false)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Backup Create"))?;
         self.restore
-            .validate(volumes, image_ids, false)
+            .validate(eos_version, volumes, image_ids, false)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Backup Restore"))?;
         Ok(())
     }
 
-    #[instrument(skip(ctx))]
-    pub async fn create(
+    #[instrument(skip(ctx, db))]
+    pub async fn create<Db: DbHandle>(
         &self,
         ctx: &RpcContext,
+        db: &mut Db,
         pkg_id: &PackageId,
         pkg_title: &str,
         pkg_version: &Version,
@@ -99,7 +108,7 @@ impl BackupActions {
                 ctx,
                 pkg_id,
                 pkg_version,
-                Some("CreateBackup"),
+                ProcedureName::CreateBackup,
                 &volumes,
                 None,
                 false,
@@ -119,6 +128,18 @@ impl BackupActions {
                 )
             })
             .collect();
+        let marketplace_url = crate::db::DatabaseModel::new()
+            .package_data()
+            .idx_model(pkg_id)
+            .expect(db)
+            .await?
+            .installed()
+            .expect(db)
+            .await?
+            .marketplace_url()
+            .get(db, true)
+            .await?
+            .into_owned();
         let tmp_path = Path::new(BACKUP_DIR)
             .join(pkg_id)
             .join(format!("{}.s9pk", pkg_id));
@@ -129,7 +150,9 @@ impl BackupActions {
             .join(pkg_version.as_str())
             .join(format!("{}.s9pk", pkg_id));
         let mut infile = File::open(&s9pk_path).await?;
-        let mut outfile = AtomicFile::new(&tmp_path).await?;
+        let mut outfile = AtomicFile::new(&tmp_path, None::<PathBuf>)
+            .await
+            .with_kind(ErrorKind::Filesystem)?;
         tokio::io::copy(&mut infile, &mut *outfile)
             .await
             .with_ctx(|_| {
@@ -138,17 +161,20 @@ impl BackupActions {
                     format!("cp {} -> {}", s9pk_path.display(), tmp_path.display()),
                 )
             })?;
-        outfile.save().await?;
+        outfile.save().await.with_kind(ErrorKind::Filesystem)?;
         let timestamp = Utc::now();
         let metadata_path = Path::new(BACKUP_DIR).join(pkg_id).join("metadata.cbor");
-        let mut outfile = AtomicFile::new(&metadata_path).await?;
+        let mut outfile = AtomicFile::new(&metadata_path, None::<PathBuf>)
+            .await
+            .with_kind(ErrorKind::Filesystem)?;
         outfile
             .write_all(&IoFormat::Cbor.to_vec(&BackupMetadata {
                 timestamp,
                 tor_keys,
+                marketplace_url,
             })?)
             .await?;
-        outfile.save().await?;
+        outfile.save().await.with_kind(ErrorKind::Filesystem)?;
         Ok(PackageBackupInfo {
             os_version: Current::new().semver().into(),
             title: pkg_title.to_owned(),
@@ -178,7 +204,7 @@ impl BackupActions {
                 ctx,
                 pkg_id,
                 pkg_version,
-                Some("RestoreBackup"),
+                ProcedureName::RestoreBackup,
                 &volumes,
                 None,
                 false,
@@ -217,16 +243,20 @@ impl BackupActions {
             .package_data()
             .lock(db, LockType::Write)
             .await?;
-        crate::db::DatabaseModel::new()
+        let pde = crate::db::DatabaseModel::new()
             .package_data()
             .idx_model(pkg_id)
             .expect(db)
             .await?
             .installed()
             .expect(db)
-            .await?
+            .await?;
+        pde.clone()
             .interface_addresses()
             .put(db, &interfaces.install(&mut *secrets, pkg_id).await?)
+            .await?;
+        pde.marketplace_url()
+            .put(db, &metadata.marketplace_url)
             .await?;
 
         let entry = crate::db::DatabaseModel::new()
@@ -240,7 +270,8 @@ impl BackupActions {
             .get(db, true)
             .await?;
 
-        reconfigure_dependents_with_live_pointers(ctx, db, &entry).await?;
+        let receipts = crate::config::ConfigReceipts::new(db).await?;
+        reconfigure_dependents_with_live_pointers(ctx, db, &receipts, &entry).await?;
 
         Ok(())
     }

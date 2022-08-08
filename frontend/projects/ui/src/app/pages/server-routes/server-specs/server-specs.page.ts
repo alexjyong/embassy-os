@@ -1,8 +1,8 @@
-import { Component, ViewChild } from '@angular/core'
-import { IonContent, ToastController } from '@ionic/angular'
-import { copyToClipboard } from 'src/app/util/web.util'
+import { Component } from '@angular/core'
+import { ToastController } from '@ionic/angular'
 import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 import { ConfigService } from 'src/app/services/config.service'
+import { copyToClipboard } from '@start9labs/shared'
 
 @Component({
   selector: 'server-specs',
@@ -10,22 +10,25 @@ import { ConfigService } from 'src/app/services/config.service'
   styleUrls: ['./server-specs.page.scss'],
 })
 export class ServerSpecsPage {
-  @ViewChild(IonContent) content: IonContent
+  readonly server$ = this.patch.watch$('server-info')
 
-  constructor (
+  constructor(
     private readonly toastCtrl: ToastController,
-    public readonly patch: PatchDbService,
-    public readonly config: ConfigService,
-  ) { }
+    private readonly patch: PatchDbService,
+    private readonly config: ConfigService,
+  ) {}
 
-  ngAfterViewInit () {
-    this.content.scrollToPoint(undefined, 1)
+  get gitHash(): string {
+    return this.config.gitHash
   }
 
-  async copy (address: string) {
+  async copy(address: string) {
     let message = ''
-    await copyToClipboard(address || '')
-      .then(success => { message = success ? 'copied to clipboard!' : 'failed to copy'})
+    await copyToClipboard(address || '').then(success => {
+      message = success
+        ? 'Copied to clipboard!'
+        : 'Failed to copy to clipboard.'
+    })
 
     const toast = await this.toastCtrl.create({
       header: message,
@@ -35,7 +38,7 @@ export class ServerSpecsPage {
     await toast.present()
   }
 
-  asIsOrder (a: any, b: any) {
+  asIsOrder(a: any, b: any) {
     return 0
   }
 }

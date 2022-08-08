@@ -1,8 +1,8 @@
 import { Component } from '@angular/core'
 import { LoadingController, getPlatforms } from '@ionic/angular'
-import { Subscription } from 'rxjs'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
 import { AuthService } from 'src/app/services/auth.service'
+import { Router } from '@angular/router'
 
 @Component({
   selector: 'login',
@@ -13,36 +13,28 @@ export class LoginPage {
   password = ''
   unmasked = false
   error = ''
-  loader: HTMLIonLoadingElement
-  patchConnectionSub: Subscription
+  loader?: HTMLIonLoadingElement
 
-  constructor (
+  constructor(
+    private readonly router: Router,
     private readonly authService: AuthService,
     private readonly loadingCtrl: LoadingController,
     private readonly api: ApiService,
-  ) { }
+  ) {}
 
-  ngOnDestroy () {
-    if (this.loader) {
-      this.loader.dismiss()
-      this.loader = undefined
-    }
-    if (this.patchConnectionSub) {
-      this.patchConnectionSub.unsubscribe()
-    }
+  ngOnDestroy() {
+    this.loader?.dismiss()
   }
 
-  toggleMask () {
+  toggleMask() {
     this.unmasked = !this.unmasked
   }
 
-  async submit () {
+  async submit() {
     this.error = ''
 
     this.loader = await this.loadingCtrl.create({
-      message: 'Logging in',
-      spinner: 'lines',
-      cssClass: 'loader',
+      message: 'Logging in...',
     })
     await this.loader.present()
 
@@ -53,10 +45,13 @@ export class LoginPage {
         metadata: { platforms: getPlatforms() },
       })
 
-      this.authService.setVerified()
       this.password = ''
-    } catch (e) {
-      this.error = e.code === 34 ? 'Invalid Password' : e.message
+      this.authService
+        .setVerified()
+        .then(() => this.router.navigate([''], { replaceUrl: true }))
+    } catch (e: any) {
+      // code 7 is for incorrect password
+      this.error = e.code === 7 ? 'Invalid Password' : e.message
     } finally {
       this.loader.dismiss()
     }

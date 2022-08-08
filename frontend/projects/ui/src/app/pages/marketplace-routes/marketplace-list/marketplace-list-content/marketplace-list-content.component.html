@@ -1,4 +1,4 @@
-<h1 class="heading ion-text-center">{{ name }}</h1>
+<h1 class="heading montserrat ion-text-center">{{ name }}</h1>
 
 <marketplace-search [(query)]="query"></marketplace-search>
 
@@ -6,6 +6,7 @@
   <marketplace-categories
     [categories]="categories"
     [category]="category"
+    [updatesAvailable]="(pkgs | filterPackages: '':'updates':localPkgs).length"
     (categoryChange)="onCategoryChange($event)"
   ></marketplace-categories>
 
@@ -21,7 +22,8 @@
         <marketplace-item [pkg]="pkg">
           <marketplace-status
             class="status"
-            [pkg]="localPkgs[pkg.manifest.id]"
+            [version]="pkg.manifest.version"
+            [localPkg]="localPkgs[pkg.manifest.id]"
           ></marketplace-status>
         </marketplace-item>
       </ion-col>

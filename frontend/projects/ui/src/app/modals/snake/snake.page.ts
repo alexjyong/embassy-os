@@ -1,7 +1,6 @@
-import { Component, HostListener } from '@angular/core'
+import { Component, HostListener, Input } from '@angular/core'
 import { ModalController } from '@ionic/angular'
 import { pauseFor } from '@start9labs/shared'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 
 @Component({
   selector: 'snake',
@@ -9,37 +8,30 @@ import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
   styleUrls: ['./snake.page.scss'],
 })
 export class SnakePage {
-  speed = 45
-  width = 40
-  height = 26
-  grid
-
-  startingLength = 4
-
-  score = 0
+  @Input()
   highScore = 0
 
-  xDown: number
-  yDown: number
-  canvas: HTMLCanvasElement
-  image: HTMLImageElement
-  context
+  score = 0
 
-  snake
-  bitcoin
+  private readonly speed = 45
+  private readonly width = 40
+  private readonly height = 26
+  private grid = NaN
 
-  moveQueue: String[] = []
+  private readonly startingLength = 4
 
-  constructor(
-    private readonly modalCtrl: ModalController,
-    private readonly patch: PatchDbService,
-  ) {}
+  private xDown?: number
+  private yDown?: number
+  private canvas!: HTMLCanvasElement
+  private image!: HTMLImageElement
+  private context!: CanvasRenderingContext2D
 
-  ngOnInit() {
-    if (this.patch.getData().ui.gaming?.snake?.['high-score']) {
-      this.highScore = this.patch.getData().ui.gaming?.snake?.['high-score']
-    }
-  }
+  private snake: any
+  private bitcoin: { x: number; y: number } = { x: NaN, y: NaN }
+
+  private moveQueue: String[] = []
+
+  constructor(private readonly modalCtrl: ModalController) {}
 
   async dismiss() {
     return this.modalCtrl.dismiss({ highScore: this.highScore })
@@ -60,8 +52,8 @@ export class SnakePage {
     this.handleTouchMove(e)
   }
 
-  @HostListener('window:resize', ['$event'])
-  sizeChange(event) {
+  @HostListener('window:resize')
+  sizeChange() {
     this.init()
   }
 
@@ -76,9 +68,9 @@ export class SnakePage {
   }
 
   init() {
-    this.canvas = document.getElementById('game') as HTMLCanvasElement
+    this.canvas = document.querySelector('canvas#game')!
     this.canvas.style.border = '1px solid #e0e0e0'
-    this.context = this.canvas.getContext('2d')
+    this.context = this.canvas.getContext('2d')!
     const container = document.getElementsByClassName('canvas-center')[0]
     this.grid = Math.min(
       Math.floor(container.clientWidth / this.width),
@@ -109,13 +101,13 @@ export class SnakePage {
     return evt.touches
   }
 
-  handleTouchStart(evt) {
+  handleTouchStart(evt: TouchEvent) {
     const firstTouch = this.getTouches(evt)[0]
     this.xDown = firstTouch.clientX
     this.yDown = firstTouch.clientY
   }
 
-  handleTouchMove(evt) {
+  handleTouchMove(evt: TouchEvent) {
     if (!this.xDown || !this.yDown) {
       return
     }
@@ -141,8 +133,8 @@ export class SnakePage {
       }
     }
     /* reset values */
-    this.xDown = null
-    this.yDown = null
+    this.xDown = undefined
+    this.yDown = undefined
   }
 
   // game loop
@@ -223,7 +215,7 @@ export class SnakePage {
       // snake ate bitcoin
       if (cell.x === this.bitcoin.x && cell.y === this.bitcoin.y) {
         this.score++
-        if (this.score > this.highScore) this.highScore = this.score
+        this.highScore = Math.max(this.score, this.highScore)
         this.snake.maxCells++
 
         this.bitcoin.x = this.getRandomInt(0, this.width) * this.grid
@@ -257,7 +249,7 @@ export class SnakePage {
     this.score = 0
   }
 
-  getRandomInt(min, max) {
+  getRandomInt(min: number, max: number) {
     return Math.floor(Math.random() * (max - min)) + min
   }
 }

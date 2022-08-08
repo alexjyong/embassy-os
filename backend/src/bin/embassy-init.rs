@@ -8,6 +8,7 @@ use embassy::disk::fsck::RepairStrategy;
 use embassy::disk::main::DEFAULT_PASSWORD;
 use embassy::disk::REPAIR_DISK_PATH;
 use embassy::hostname::get_product_key;
+use embassy::init::STANDBY_MODE_PATH;
 use embassy::middleware::cors::cors;
 use embassy::middleware::diagnostic::diagnostic;
 use embassy::middleware::encrypt::encrypt;
@@ -17,7 +18,7 @@ use embassy::shutdown::Shutdown;
 use embassy::sound::CHIME;
 use embassy::util::logger::EmbassyLogger;
 use embassy::util::Invoke;
-use embassy::{Error, ResultExt};
+use embassy::{Error, ErrorKind, ResultExt};
 use http::StatusCode;
 use rpc_toolkit::rpc_server;
 use tokio::process::Command;
@@ -76,10 +77,11 @@ async fn setup_or_init(cfg_path: Option<&str>) -> Result<(), Error> {
         .with_kind(embassy::ErrorKind::Network)?;
     } else {
         let cfg = RpcContextConfig::load(cfg_path).await?;
-        embassy::disk::main::import(
-            tokio::fs::read_to_string("/embassy-os/disk.guid") // unique identifier for volume group - keeps track of the disk that goes with your embassy
-                .await?
-                .trim(),
+        let guid_string = tokio::fs::read_to_string("/embassy-os/disk.guid") // unique identifier for volume group - keeps track of the disk that goes with your embassy
+            .await?;
+        let guid = guid_string.trim();
+        let requires_reboot = embassy::disk::main::import(
+            guid,
             cfg.datadir(),
             if tokio::fs::metadata(REPAIR_DISK_PATH).await.is_ok() {
                 RepairStrategy::Aggressive
@@ -89,9 +91,17 @@ async fn setup_or_init(cfg_path: Option<&str>) -> Result<(), Error> {
             DEFAULT_PASSWORD,
         )
         .await?;
-        tokio::fs::remove_file(REPAIR_DISK_PATH)
-            .await
-            .with_ctx(|_| (embassy::ErrorKind::Filesystem, REPAIR_DISK_PATH))?;
+        if tokio::fs::metadata(REPAIR_DISK_PATH).await.is_ok() {
+            tokio::fs::remove_file(REPAIR_DISK_PATH)
+                .await
+                .with_ctx(|_| (embassy::ErrorKind::Filesystem, REPAIR_DISK_PATH))?;
+        }
+        if requires_reboot.0 {
+            embassy::disk::main::export(guid, cfg.datadir()).await?;
+            Command::new("reboot")
+                .invoke(embassy::ErrorKind::Unknown)
+                .await?;
+        }
         tracing::info!("Loaded Disk");
         embassy::init::init(&cfg, &get_product_key().await?).await?;
     }
@@ -119,6 +129,13 @@ async fn run_script_if_exists<P: AsRef<Path>>(path: P) {
 
 #[instrument]
 async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
+    if tokio::fs::metadata(STANDBY_MODE_PATH).await.is_ok() {
+        tokio::fs::remove_file(STANDBY_MODE_PATH).await?;
+        Command::new("sync").invoke(ErrorKind::Filesystem).await?;
+        embassy::sound::SHUTDOWN.play().await?;
+        futures::future::pending::<()>().await;
+    }
+
     embassy::sound::BEP.play().await?;
 
     run_script_if_exists("/embassy-os/preinit.sh").await;
@@ -201,7 +218,7 @@ fn main() {
     let matches = clap::App::new("embassyd")
         .arg(
             clap::Arg::with_name("config")
-                .short("c")
+                .short('c')
                 .long("config")
                 .takes_value(true),
         )

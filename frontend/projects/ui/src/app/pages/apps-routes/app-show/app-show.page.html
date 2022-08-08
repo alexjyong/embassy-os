@@ -6,17 +6,15 @@
       <!-- ** status ** -->
       <app-show-status
         [pkg]="pkg"
-        [connectionFailure]="connectionFailure$ | async"
         [dependencies]="dependencies"
         [status]="status"
       ></app-show-status>
       <!-- ** installed && !backing-up ** -->
-      <ng-container *ngIf="isInstalled(pkg, status)">
+      <ng-container *ngIf="isInstalled(pkg) && !isBackingUp(status)">
         <!-- ** health checks ** -->
         <app-show-health-checks
           *ngIf="isRunning(status)"
           [pkg]="pkg"
-          [connectionFailure]="connectionFailure$ | async"
         ></app-show-health-checks>
         <!-- ** dependencies ** -->
         <app-show-dependencies
@@ -24,16 +22,18 @@
           [dependencies]="dependencies"
         ></app-show-dependencies>
         <!-- ** menu ** -->
-        <app-show-menu [buttons]="pkg | toButtons"></app-show-menu>
+        <app-show-menu
+          [buttons]="pkg | toButtons: (currentMarketplace$ | async): (altMarketplaceData$ | async)"
+        ></app-show-menu>
       </ng-container>
     </ion-item-group>
-    
+
     <!-- ** installing, updating, restoring ** -->
     <ion-content *ngIf="showProgress(pkg)">
       <app-show-progress
-        *ngIf="pkg | installState as installProgress"
+        *ngIf="pkg | progressData as progressData"
         [pkg]="pkg"
-        [installProgress]="installProgress"
+        [progressData]="progressData"
       ></app-show-progress>
     </ion-content>
   </ion-content>

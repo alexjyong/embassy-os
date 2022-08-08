@@ -1,77 +1,22 @@
-use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
+pub use helpers::script_dir;
+pub use models::VolumeId;
 use patch_db::{HasModel, Map, MapModel};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::context::RpcContext;
-use crate::id::{Id, IdUnchecked};
 use crate::net::interface::{InterfaceId, Interfaces};
+use crate::net::NetController;
 use crate::s9pk::manifest::PackageId;
 use crate::util::Version;
 use crate::{Error, ResultExt};
 
-pub const PKG_VOLUME_DIR: &'static str = "package-data/volumes";
-pub const BACKUP_DIR: &'static str = "/media/embassy-os/backups";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum VolumeId<S: AsRef<str> = String> {
-    Backup,
-    Custom(Id<S>),
-}
-impl<S: AsRef<str>> std::fmt::Display for VolumeId<S> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VolumeId::Backup => write!(f, "BACKUP"),
-            VolumeId::Custom(id) => write!(f, "{}", id),
-        }
-    }
-}
-impl<S: AsRef<str>> AsRef<str> for VolumeId<S> {
-    fn as_ref(&self) -> &str {
-        match self {
-            VolumeId::Backup => "BACKUP",
-            VolumeId::Custom(id) => id.as_ref(),
-        }
-    }
-}
-impl<S: AsRef<str>> Borrow<str> for VolumeId<S> {
-    fn borrow(&self) -> &str {
-        self.as_ref()
-    }
-}
-impl<S: AsRef<str>> AsRef<Path> for VolumeId<S> {
-    fn as_ref(&self) -> &Path {
-        AsRef::<str>::as_ref(self).as_ref()
-    }
-}
-impl<'de, S> Deserialize<'de> for VolumeId<S>
-where
-    S: AsRef<str>,
-    IdUnchecked<S>: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let unchecked: IdUnchecked<S> = Deserialize::deserialize(deserializer)?;
-        Ok(match unchecked.0.as_ref() {
-            "BACKUP" => VolumeId::Backup,
-            _ => VolumeId::Custom(Id::try_from(unchecked.0).map_err(serde::de::Error::custom)?),
-        })
-    }
-}
-impl<S: AsRef<str>> Serialize for VolumeId<S> {
-    fn serialize<Ser>(&self, serializer: Ser) -> Result<Ser::Ok, Ser::Error>
-    where
-        Ser: serde::Serializer,
-    {
-        serializer.serialize_str(self.as_ref())
-    }
-}
+pub const PKG_VOLUME_DIR: &str = "package-data/volumes";
+pub const BACKUP_DIR: &str = "/media/embassy-os/backups";
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Volumes(BTreeMap<VolumeId, Volume>);
@@ -93,20 +38,22 @@ impl Volumes {
         version: &Version,
     ) -> Result<(), Error> {
         for (volume_id, volume) in &self.0 {
-            volume.install(ctx, pkg_id, version, volume_id).await?; // TODO: concurrent?
+            volume
+                .install(&ctx.datadir, pkg_id, version, volume_id)
+                .await?; // TODO: concurrent?
         }
         Ok(())
     }
     pub fn get_path_for(
         &self,
-        ctx: &RpcContext,
+        path: &PathBuf,
         pkg_id: &PackageId,
         version: &Version,
         volume_id: &VolumeId,
     ) -> Option<PathBuf> {
         self.0
             .get(volume_id)
-            .map(|volume| volume.path_for(ctx, pkg_id, version, volume_id))
+            .map(|volume| volume.path_for(path, pkg_id, version, volume_id))
     }
     pub fn to_readonly(&self) -> Self {
         Volumes(
@@ -205,14 +152,14 @@ impl Volume {
     }
     pub async fn install(
         &self,
-        ctx: &RpcContext,
+        path: &PathBuf,
         pkg_id: &PackageId,
         version: &Version,
         volume_id: &VolumeId,
     ) -> Result<(), Error> {
         match self {
             Volume::Data { .. } => {
-                tokio::fs::create_dir_all(self.path_for(ctx, pkg_id, version, volume_id)).await?;
+                tokio::fs::create_dir_all(self.path_for(path, pkg_id, version, volume_id)).await?;
             }
             _ => (),
         }
@@ -220,25 +167,25 @@ impl Volume {
     }
     pub fn path_for(
         &self,
-        ctx: &RpcContext,
+        data_dir_path: impl AsRef<Path>,
         pkg_id: &PackageId,
         version: &Version,
         volume_id: &VolumeId,
     ) -> PathBuf {
         match self {
-            Volume::Data { .. } => data_dir(&ctx.datadir, pkg_id, volume_id),
-            Volume::Assets {} => asset_dir(&ctx.datadir, pkg_id, version).join(volume_id),
+            Volume::Data { .. } => data_dir(&data_dir_path, pkg_id, volume_id),
+            Volume::Assets {} => asset_dir(&data_dir_path, pkg_id, version).join(volume_id),
             Volume::Pointer {
                 package_id,
                 volume_id,
                 path,
                 ..
-            } => data_dir(&ctx.datadir, package_id, volume_id).join(if path.is_absolute() {
+            } => data_dir(&data_dir_path, package_id, volume_id).join(if path.is_absolute() {
                 path.strip_prefix("/").unwrap()
             } else {
                 path.as_ref()
             }),
-            Volume::Certificate { interface_id: _ } => ctx.net_controller.ssl_directory_for(pkg_id),
+            Volume::Certificate { interface_id: _ } => NetController::ssl_directory_for(pkg_id),
             Volume::Backup { .. } => backup_dir(pkg_id),
         }
     }

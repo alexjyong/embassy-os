@@ -1,6 +1,6 @@
 import { Component } from '@angular/core'
-import { defer, Observable } from 'rxjs'
-import { filter, first, map, startWith, switchMapTo, tap } from 'rxjs/operators'
+import { Observable } from 'rxjs'
+import { filter, first, map, startWith, switchMapTo } from 'rxjs/operators'
 import { exists, isEmptyObject } from '@start9labs/shared'
 import {
   AbstractMarketplaceService,
@@ -9,34 +9,30 @@ import {
 
 import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 import { PackageDataEntry } from 'src/app/services/patch-db/data-model'
-import { spreadProgress } from '../utils/spread-progress'
 
 @Component({
   selector: 'marketplace-list',
   templateUrl: './marketplace-list.page.html',
 })
 export class MarketplaceListPage {
-  readonly localPkgs$: Observable<Record<string, PackageDataEntry>> = defer(
-    () => this.patch.watch$('package-data'),
-  ).pipe(
-    filter(data => exists(data) && !isEmptyObject(data)),
-    tap(pkgs => Object.values(pkgs).forEach(spreadProgress)),
-    startWith({}),
-  )
+  readonly connected$ = this.patch.connected$
 
-  readonly categories$ = this.marketplaceService
-    .getCategories()
+  readonly localPkgs$: Observable<Record<string, PackageDataEntry>> = this.patch
+    .watch$('package-data')
     .pipe(
-      map(categories => new Set(['featured', 'updates', ...categories, 'all'])),
+      filter(data => exists(data) && !isEmptyObject(data)),
+      startWith({}),
     )
 
-  readonly pkgs$: Observable<MarketplacePkg[]> = defer(() =>
-    this.patch.watch$('server-info'),
-  ).pipe(
-    filter(data => exists(data) && !isEmptyObject(data)),
-    first(),
-    switchMapTo(this.marketplaceService.getPackages()),
-  )
+  readonly categories$ = this.marketplaceService.getCategories()
+
+  readonly pkgs$: Observable<MarketplacePkg[]> = this.patch
+    .watch$('server-info')
+    .pipe(
+      filter(data => exists(data) && !isEmptyObject(data)),
+      first(),
+      switchMapTo(this.marketplaceService.getPackages()),
+    )
 
   readonly name$: Observable<string> = this.marketplaceService
     .getMarketplace()
@@ -46,8 +42,4 @@ export class MarketplaceListPage {
     private readonly patch: PatchDbService,
     private readonly marketplaceService: AbstractMarketplaceService,
   ) {}
-
-  get loaded(): boolean {
-    return this.patch.loaded
-  }
 }

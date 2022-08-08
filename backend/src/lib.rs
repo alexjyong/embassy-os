@@ -1,10 +1,13 @@
-pub const CONFIG_PATH: &str = "/etc/embassy/config.yaml";
-#[cfg(not(feature = "beta"))]
 pub const DEFAULT_MARKETPLACE: &str = "https://marketplace.start9.com";
-#[cfg(feature = "beta")]
-pub const DEFAULT_MARKETPLACE: &str = "https://beta-registry-0-3.start9labs.com";
 pub const BUFFER_SIZE: usize = 1024;
 pub const HOST_IP: [u8; 4] = [172, 18, 0, 1];
+pub const TARGET: &str = current_platform::CURRENT_PLATFORM;
+lazy_static::lazy_static! {
+    pub static ref ARCH: &'static str = {
+        let (arch, _) = TARGET.split_once("-").unwrap();
+        arch
+    };
+}
 
 pub mod action;
 pub mod auth;
@@ -31,6 +34,7 @@ pub mod middleware;
 pub mod migration;
 pub mod net;
 pub mod notifications;
+pub mod procedure;
 pub mod properties;
 pub mod s9pk;
 pub mod setup;
@@ -99,6 +103,7 @@ pub fn server() -> Result<(), RpcError> {
     config::config,
     control::start,
     control::stop,
+    control::restart,
     logs::logs,
     properties::properties,
     dependencies::dependency,

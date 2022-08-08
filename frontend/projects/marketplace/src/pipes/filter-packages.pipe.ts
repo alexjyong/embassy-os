@@ -1,8 +1,9 @@
 import { NgModule, Pipe, PipeTransform } from '@angular/core'
-import Fuse from 'fuse.js/dist/fuse.min.js'
+import Fuse from 'fuse.js'
 
 import { MarketplacePkg } from '../types/marketplace-pkg'
 import { MarketplaceManifest } from '../types/marketplace-manifest'
+import { Emver } from '@start9labs/shared'
 
 const defaultOps = {
   isCaseSensitive: false,
@@ -29,16 +30,14 @@ const defaultOps = {
   name: 'filterPackages',
 })
 export class FilterPackagesPipe implements PipeTransform {
+  constructor(private readonly emver: Emver) {}
+
   transform(
-    packages: MarketplacePkg[] | null,
+    packages: MarketplacePkg[],
     query: string,
     category: string,
     local: Record<string, { manifest: MarketplaceManifest }> = {},
-  ): MarketplacePkg[] | null {
-    if (!packages) {
-      return null
-    }
-
+  ): MarketplacePkg[] {
     if (query) {
       const fuse = new Fuse(packages, defaultOps)
 
@@ -49,7 +48,10 @@ export class FilterPackagesPipe implements PipeTransform {
       return packages.filter(
         ({ manifest }) =>
           local[manifest.id] &&
-          manifest.version !== local[manifest.id].manifest.version,
+          this.emver.compare(
+            manifest.version,
+            local[manifest.id].manifest.version,
+          ) === 1,
       )
     }
 

@@ -73,7 +73,7 @@ export class EmbassyPage {
         })
         await alert.present()
       }
-    } catch (e) {
+    } catch (e: any) {
       this.errorToastService.present(e)
     } finally {
       this.loading = false
@@ -100,6 +100,7 @@ export class EmbassyPage {
                 this.presentModalPassword(drive)
               }
             },
+            cssClass: 'enter-click',
           },
         ],
       })
@@ -141,7 +142,7 @@ export class EmbassyPage {
       } else {
         await this.navCtrl.navigateForward(`/success`)
       }
-    } catch (e) {
+    } catch (e: any) {
       this.errorToastService.present({
         message: `${e.message}\n\nRestart Embassy to try again.`,
       })

@@ -1,8 +1,9 @@
 import { isEmptyObject } from '@start9labs/shared'
-import { PackageState } from 'src/app/types/package-state'
 import {
+  MainStatusStarting,
   PackageDataEntry,
   PackageMainStatus,
+  PackageState,
   Status,
 } from 'src/app/services/patch-db/data-model'
 
@@ -16,11 +17,12 @@ export function renderPkgStatus(pkg: PackageDataEntry): PackageStatus {
   let primary: PrimaryStatus
   let dependency: DependencyStatus | null = null
   let health: HealthStatus | null = null
+  const hasHealthChecks = !isEmptyObject(pkg.manifest['health-checks'])
 
-  if (pkg.state === PackageState.Installed) {
+  if (pkg.state === PackageState.Installed && pkg.installed) {
     primary = getPrimaryStatus(pkg.installed.status)
     dependency = getDependencyStatus(pkg)
-    health = getHealthStatus(pkg.installed.status)
+    health = getHealthStatus(pkg.installed.status, hasHealthChecks)
   } else {
     primary = pkg.state as string as PrimaryStatus
   }
@@ -31,14 +33,17 @@ export function renderPkgStatus(pkg: PackageDataEntry): PackageStatus {
 function getPrimaryStatus(status: Status): PrimaryStatus {
   if (!status.configured) {
     return PrimaryStatus.NeedsConfig
+  } else if ((status.main as MainStatusStarting).restarting) {
+    return PrimaryStatus.Restarting
   } else {
     return status.main.status as any as PrimaryStatus
   }
 }
 
-function getDependencyStatus(pkg: PackageDataEntry): DependencyStatus {
+function getDependencyStatus(pkg: PackageDataEntry): DependencyStatus | null {
   const installed = pkg.installed
-  if (isEmptyObject(installed['current-dependencies'])) return null
+  if (!installed || isEmptyObject(installed['current-dependencies']))
+    return null
 
   const depErrors = installed.status['dependency-errors']
   const depIds = Object.keys(depErrors).filter(key => !!depErrors[key])
@@ -46,19 +51,33 @@ function getDependencyStatus(pkg: PackageDataEntry): DependencyStatus {
   return depIds.length ? DependencyStatus.Warning : DependencyStatus.Satisfied
 }
 
-function getHealthStatus(status: Status): HealthStatus {
-  if (status.main.status === PackageMainStatus.Running) {
-    const values = Object.values(status.main.health)
-    if (values.some(h => h.result === 'failure')) {
-      return HealthStatus.Failure
-    } else if (values.some(h => h.result === 'starting')) {
-      return HealthStatus.Starting
-    } else if (values.some(h => h.result === 'loading')) {
-      return HealthStatus.Loading
-    } else {
-      return HealthStatus.Healthy
-    }
+function getHealthStatus(
+  status: Status,
+  hasHealthChecks: boolean,
+): HealthStatus | null {
+  if (status.main.status !== PackageMainStatus.Running || !status.main.health) {
+    return null
   }
+
+  const values = Object.values(status.main.health)
+
+  if (values.some(h => h.result === 'failure')) {
+    return HealthStatus.Failure
+  }
+
+  if (!values.length && hasHealthChecks) {
+    return HealthStatus.Waiting
+  }
+
+  if (values.some(h => h.result === 'loading')) {
+    return HealthStatus.Loading
+  }
+
+  if (values.some(h => !h.result || h.result === 'starting')) {
+    return HealthStatus.Starting
+  }
+
+  return HealthStatus.Healthy
 }
 
 export interface StatusRendering {
@@ -77,6 +96,7 @@ export enum PrimaryStatus {
   Starting = 'starting',
   Running = 'running',
   Stopping = 'stopping',
+  Restarting = 'restarting',
   Stopped = 'stopped',
   BackingUp = 'backing-up',
   // config
@@ -90,6 +110,7 @@ export enum DependencyStatus {
 
 export enum HealthStatus {
   Failure = 'failure',
+  Waiting = 'waiting',
   Starting = 'starting',
   Loading = 'loading',
   Healthy = 'healthy',
@@ -119,6 +140,11 @@ export const PrimaryRendering: Record<string, StatusRendering> = {
   [PrimaryStatus.Stopping]: {
     display: 'Stopping',
     color: 'dark-shade',
+    showDots: true,
+  },
+  [PrimaryStatus.Restarting]: {
+    display: 'Restarting',
+    color: 'tertiary',
     showDots: true,
   },
   [PrimaryStatus.Stopped]: {

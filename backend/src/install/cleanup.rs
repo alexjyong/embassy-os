@@ -1,74 +1,96 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use bollard::image::ListImagesOptions;
-use color_eyre::eyre::eyre;
-use patch_db::{DbHandle, LockType, PatchDbHandle};
+use patch_db::{DbHandle, LockReceipt, LockTargetId, LockType, PatchDbHandle, Verifier};
 use sqlx::{Executor, Sqlite};
 use tracing::instrument;
 
 use super::{PKG_ARCHIVE_DIR, PKG_DOCKER_DIR};
+use crate::config::{not_found, ConfigReceipts};
 use crate::context::RpcContext;
-use crate::db::model::{CurrentDependencyInfo, InstalledPackageDataEntry, PackageDataEntry};
-use crate::dependencies::reconfigure_dependents_with_live_pointers;
+use crate::db::model::{
+    AllPackageData, CurrentDependencies, CurrentDependents, InstalledPackageDataEntry,
+    PackageDataEntry,
+};
+use crate::dependencies::{
+    reconfigure_dependents_with_live_pointers, DependencyErrors, TryHealReceipts,
+};
 use crate::error::ErrorCollection;
 use crate::s9pk::manifest::{Manifest, PackageId};
 use crate::util::{Apply, Version};
+use crate::volume::{asset_dir, script_dir};
 use crate::Error;
 
-#[instrument(skip(ctx, db, deps))]
-pub async fn update_dependency_errors_of_dependents<
-    'a,
-    Db: DbHandle,
-    I: IntoIterator<Item = &'a PackageId>,
->(
+pub struct UpdateDependencyReceipts {
+    try_heal: TryHealReceipts,
+    dependency_errors: LockReceipt<DependencyErrors, String>,
+    manifest: LockReceipt<Manifest, String>,
+}
+impl UpdateDependencyReceipts {
+    pub async fn new<'a>(db: &'a mut impl DbHandle) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let setup = Self::setup(&mut locks);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(locks: &mut Vec<LockTargetId>) -> impl FnOnce(&Verifier) -> Result<Self, Error> {
+        let dependency_errors = crate::db::DatabaseModel::new()
+            .package_data()
+            .star()
+            .installed()
+            .map(|x| x.status().dependency_errors())
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        let manifest = crate::db::DatabaseModel::new()
+            .package_data()
+            .star()
+            .installed()
+            .map(|x| x.manifest())
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        let try_heal = TryHealReceipts::setup(locks);
+        move |skeleton_key| {
+            Ok(Self {
+                dependency_errors: dependency_errors.verify(skeleton_key)?,
+                manifest: manifest.verify(skeleton_key)?,
+                try_heal: try_heal(skeleton_key)?,
+            })
+        }
+    }
+}
+
+#[instrument(skip(ctx, db, deps, receipts))]
+pub async fn update_dependency_errors_of_dependents<'a, Db: DbHandle>(
     ctx: &RpcContext,
     db: &mut Db,
     id: &PackageId,
-    deps: I,
+    deps: &CurrentDependents,
+    receipts: &UpdateDependencyReceipts,
 ) -> Result<(), Error> {
-    for dep in deps {
-        if let Some(man) = &*crate::db::DatabaseModel::new()
-            .package_data()
-            .idx_model(&dep)
-            .and_then(|m| m.installed())
-            .map::<_, Manifest>(|m| m.manifest())
-            .get(db, true)
-            .await?
-        {
+    for dep in deps.0.keys() {
+        if let Some(man) = receipts.manifest.get(db, dep).await? {
             if let Err(e) = if let Some(info) = man.dependencies.0.get(id) {
-                info.satisfied(ctx, db, id, None, dep).await?
+                info.satisfied(ctx, db, id, None, dep, &receipts.try_heal)
+                    .await?
             } else {
                 Ok(())
             } {
-                let mut errs = crate::db::DatabaseModel::new()
-                    .package_data()
-                    .idx_model(&dep)
-                    .expect(db)
+                let mut errs = receipts
+                    .dependency_errors
+                    .get(db, dep)
                     .await?
-                    .installed()
-                    .expect(db)
-                    .await?
-                    .status()
-                    .dependency_errors()
-                    .get_mut(db)
-                    .await?;
+                    .ok_or_else(not_found)?;
                 errs.0.insert(id.clone(), e);
-                errs.save(db).await?;
+                receipts.dependency_errors.set(db, errs, dep).await?
             } else {
-                let mut errs = crate::db::DatabaseModel::new()
-                    .package_data()
-                    .idx_model(&dep)
-                    .expect(db)
+                let mut errs = receipts
+                    .dependency_errors
+                    .get(db, dep)
                     .await?
-                    .installed()
-                    .expect(db)
-                    .await?
-                    .status()
-                    .dependency_errors()
-                    .get_mut(db)
-                    .await?;
+                    .ok_or_else(not_found)?;
                 errs.0.remove(id);
-                errs.save(db).await?;
+                receipts.dependency_errors.set(db, errs, dep).await?
             }
         }
     }
@@ -123,28 +145,66 @@ pub async fn cleanup(ctx: &RpcContext, id: &PackageId, version: &Version) -> Res
             .await
             .apply(|res| errors.handle(res));
     }
+    let assets_path = asset_dir(&ctx.datadir, id, version);
+    if tokio::fs::metadata(&assets_path).await.is_ok() {
+        tokio::fs::remove_dir_all(&assets_path)
+            .await
+            .apply(|res| errors.handle(res));
+    }
+    let scripts_path = script_dir(&ctx.datadir, id, version);
+    if tokio::fs::metadata(&scripts_path).await.is_ok() {
+        tokio::fs::remove_dir_all(&scripts_path)
+            .await
+            .apply(|res| errors.handle(res));
+    }
 
     errors.into_result()
 }
 
-#[instrument(skip(ctx, db))]
+pub struct CleanupFailedReceipts {
+    package_data_entry: LockReceipt<PackageDataEntry, String>,
+    package_entries: LockReceipt<AllPackageData, ()>,
+}
+
+impl CleanupFailedReceipts {
+    pub async fn new<'a>(db: &'a mut impl DbHandle) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let setup = Self::setup(&mut locks);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(locks: &mut Vec<LockTargetId>) -> impl FnOnce(&Verifier) -> Result<Self, Error> {
+        let package_data_entry = crate::db::DatabaseModel::new()
+            .package_data()
+            .star()
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        let package_entries = crate::db::DatabaseModel::new()
+            .package_data()
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        move |skeleton_key| {
+            Ok(Self {
+                package_data_entry: package_data_entry.verify(skeleton_key).unwrap(),
+                package_entries: package_entries.verify(skeleton_key).unwrap(),
+            })
+        }
+    }
+}
+
+#[instrument(skip(ctx, db, receipts))]
 pub async fn cleanup_failed<Db: DbHandle>(
     ctx: &RpcContext,
     db: &mut Db,
     id: &PackageId,
+    receipts: &CleanupFailedReceipts,
 ) -> Result<(), Error> {
-    crate::db::DatabaseModel::new()
-        .package_data()
-        .lock(db, LockType::Write)
-        .await?;
-    let pde = crate::db::DatabaseModel::new()
-        .package_data()
-        .idx_model(id)
-        .expect(db)
+    let pde = receipts
+        .package_data_entry
+        .get(db, id)
         .await?
-        .get(db, true)
-        .await?
-        .into_owned();
+        .ok_or_else(not_found)?;
     if let Some(manifest) = match &pde {
         PackageDataEntry::Installing { manifest, .. }
         | PackageDataEntry::Restoring { manifest, .. } => Some(manifest),
@@ -173,26 +233,25 @@ pub async fn cleanup_failed<Db: DbHandle>(
 
     match pde {
         PackageDataEntry::Installing { .. } | PackageDataEntry::Restoring { .. } => {
-            crate::db::DatabaseModel::new()
-                .package_data()
-                .remove(db, id)
-                .await?;
+            let mut entries = receipts.package_entries.get(db).await?;
+            entries.0.remove(id);
+            receipts.package_entries.set(db, entries).await?;
         }
         PackageDataEntry::Updating {
             installed,
             static_files,
             ..
         } => {
-            crate::db::DatabaseModel::new()
-                .package_data()
-                .idx_model(id)
-                .put(
+            receipts
+                .package_data_entry
+                .set(
                     db,
-                    &PackageDataEntry::Installed {
+                    PackageDataEntry::Installed {
                         manifest: installed.manifest.clone(),
                         installed,
                         static_files,
                     },
+                    id,
                 )
                 .await?;
         }
@@ -202,38 +261,74 @@ pub async fn cleanup_failed<Db: DbHandle>(
     Ok(())
 }
 
-#[instrument(skip(db, current_dependencies))]
-pub async fn remove_from_current_dependents_lists<
-    'a,
-    Db: DbHandle,
-    I: IntoIterator<Item = &'a PackageId>,
->(
+#[instrument(skip(db, current_dependencies, current_dependent_receipt))]
+pub async fn remove_from_current_dependents_lists<'a, Db: DbHandle>(
     db: &mut Db,
     id: &'a PackageId,
-    current_dependencies: I,
+    current_dependencies: &'a CurrentDependencies,
+    current_dependent_receipt: &LockReceipt<CurrentDependents, String>,
 ) -> Result<(), Error> {
-    for dep in current_dependencies.into_iter().chain(std::iter::once(id)) {
-        if let Some(current_dependents) = crate::db::DatabaseModel::new()
-            .package_data()
-            .idx_model(dep)
-            .and_then(|m| m.installed())
-            .map::<_, BTreeMap<PackageId, CurrentDependencyInfo>>(|m| m.current_dependents())
-            .check(db)
-            .await?
-        {
-            if current_dependents
-                .clone()
-                .idx_model(id)
-                .exists(db, true)
-                .await?
-            {
-                current_dependents.remove(db, id).await?
+    for dep in current_dependencies.0.keys().chain(std::iter::once(id)) {
+        if let Some(mut current_dependents) = current_dependent_receipt.get(db, dep).await? {
+            if current_dependents.0.remove(id).is_some() {
+                current_dependent_receipt
+                    .set(db, current_dependents, dep)
+                    .await?;
             }
         }
     }
     Ok(())
 }
+pub struct UninstallReceipts {
+    config: ConfigReceipts,
+    removing: LockReceipt<InstalledPackageDataEntry, ()>,
+    packages: LockReceipt<AllPackageData, ()>,
+    current_dependents: LockReceipt<CurrentDependents, String>,
+    update_depenency_receipts: UpdateDependencyReceipts,
+}
+impl UninstallReceipts {
+    pub async fn new<'a>(db: &'a mut impl DbHandle, id: &PackageId) -> Result<Self, Error> {
+        let mut locks = Vec::new();
 
+        let setup = Self::setup(&mut locks, id);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(
+        locks: &mut Vec<LockTargetId>,
+        id: &PackageId,
+    ) -> impl FnOnce(&Verifier) -> Result<Self, Error> {
+        let config = ConfigReceipts::setup(locks);
+        let removing = crate::db::DatabaseModel::new()
+            .package_data()
+            .idx_model(id)
+            .and_then(|pde| pde.removing())
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+
+        let current_dependents = crate::db::DatabaseModel::new()
+            .package_data()
+            .star()
+            .installed()
+            .map(|x| x.current_dependents())
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        let packages = crate::db::DatabaseModel::new()
+            .package_data()
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        let update_depenency_receipts = UpdateDependencyReceipts::setup(locks);
+        move |skeleton_key| {
+            Ok(Self {
+                config: config(skeleton_key)?,
+                removing: removing.verify(skeleton_key)?,
+                current_dependents: current_dependents.verify(skeleton_key)?,
+                update_depenency_receipts: update_depenency_receipts(skeleton_key)?,
+                packages: packages.verify(skeleton_key)?,
+            })
+        }
+    }
+}
 #[instrument(skip(ctx, secrets, db))]
 pub async fn uninstall<Ex>(
     ctx: &RpcContext,
@@ -245,44 +340,32 @@ where
     for<'a> &'a mut Ex: Executor<'a, Database = Sqlite>,
 {
     let mut tx = db.begin().await?;
-    crate::db::DatabaseModel::new()
-        .package_data()
-        .lock(&mut tx, LockType::Write)
-        .await?;
-    let entry = crate::db::DatabaseModel::new()
-        .package_data()
-        .idx_model(id)
-        .and_then(|pde| pde.removing())
-        .get(&mut tx, true)
-        .await?
-        .into_owned()
-        .ok_or_else(|| {
-            Error::new(
-                eyre!("Package not in removing state: {}", id),
-                crate::ErrorKind::NotFound,
-            )
-        })?;
+    let receipts = UninstallReceipts::new(&mut tx, id).await?;
+    let entry = receipts.removing.get(&mut tx).await?;
     cleanup(ctx, &entry.manifest.id, &entry.manifest.version).await?;
 
-    crate::db::DatabaseModel::new()
-        .package_data()
-        .remove(&mut tx, id)
-        .await?;
-
+    let packages = {
+        let mut packages = receipts.packages.get(&mut tx).await?;
+        packages.0.remove(id);
+        packages
+    };
+    receipts.packages.set(&mut tx, packages).await?;
     // once we have removed the package entry, we can change all the dependent pointers to null
-    reconfigure_dependents_with_live_pointers(ctx, &mut tx, &entry).await?;
+    reconfigure_dependents_with_live_pointers(ctx, &mut tx, &receipts.config, &entry).await?;
 
     remove_from_current_dependents_lists(
         &mut tx,
         &entry.manifest.id,
-        entry.current_dependencies.keys(),
+        &entry.current_dependencies,
+        &receipts.current_dependents,
     )
     .await?;
     update_dependency_errors_of_dependents(
         ctx,
         &mut tx,
         &entry.manifest.id,
-        entry.current_dependents.keys(),
+        &entry.current_dependents,
+        &receipts.update_depenency_receipts,
     )
     .await?;
     let volumes = ctx

@@ -42,14 +42,14 @@ export class WifiPage {
     await this.getWifi()
   }
 
-  async getWifi(timeout?: number): Promise<void> {
+  async getWifi(timeout: number = 0): Promise<void> {
     this.loading = true
     try {
       this.wifi = await this.api.getWifi({}, timeout)
       if (!this.wifi.country) {
         await this.presentAlertCountry()
       }
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       this.loading = false
@@ -68,7 +68,7 @@ export class WifiPage {
             role: 'cancel',
           },
         ],
-        cssClass: 'wide-alert enter-click',
+        cssClass: 'enter-click',
       })
       await alert.present()
       return
@@ -103,7 +103,7 @@ export class WifiPage {
           },
         },
       ],
-      cssClass: 'wide-alert enter-click select-warning',
+      cssClass: 'enter-click select-warning',
     })
     await alert.present()
   }
@@ -170,8 +170,7 @@ export class WifiPage {
 
   private async setCountry(country: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
-      cssClass: 'loader',
+      message: 'Setting country...',
     })
     await loader.present()
 
@@ -179,7 +178,7 @@ export class WifiPage {
       await this.api.setWifiCountry({ country })
       await this.getWifi()
       this.wifi.country = country
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -262,16 +261,14 @@ export class WifiPage {
 
   private async connect(ssid: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Connecting. This could take a while...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       await this.api.connectWifi({ ssid })
       await this.confirmWifi(ssid)
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -280,9 +277,7 @@ export class WifiPage {
 
   private async delete(ssid: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Deleting...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -290,7 +285,7 @@ export class WifiPage {
       await this.api.deleteWifi({ ssid })
       await this.getWifi()
       delete this.wifi.ssids[ssid]
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -299,9 +294,7 @@ export class WifiPage {
 
   private async save(ssid: string, password: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Saving...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -313,7 +306,7 @@ export class WifiPage {
         connect: false,
       })
       await this.getWifi()
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -322,9 +315,7 @@ export class WifiPage {
 
   private async saveAndConnect(ssid: string, password: string): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Connecting. This could take a while...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -337,7 +328,7 @@ export class WifiPage {
       })
 
       await this.confirmWifi(ssid, true)
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()

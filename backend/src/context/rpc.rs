@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bollard::Docker;
-use color_eyre::eyre::eyre;
+use helpers::to_tmp_path;
 use patch_db::json_ptr::JsonPointer;
-use patch_db::{DbHandle, LockType, PatchDb, Revision};
+use patch_db::{DbHandle, LockReceipt, LockType, PatchDb, Revision};
 use reqwest::Url;
 use rpc_toolkit::url::Host;
 use rpc_toolkit::Context;
@@ -21,10 +21,10 @@ use tokio::process::Command;
 use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use tracing::instrument;
 
-use crate::core::rpc_continuations::{RequestGuid, RpcContinuation};
+use crate::core::rpc_continuations::{RequestGuid, RestHandler, RpcContinuation};
 use crate::db::model::{Database, InstalledPackageDataEntry, PackageDataEntry};
 use crate::hostname::{derive_hostname, derive_id, get_product_key};
-use crate::install::cleanup::{cleanup_failed, uninstall};
+use crate::install::cleanup::{cleanup_failed, uninstall, CleanupFailedReceipts};
 use crate::manager::ManagerMap;
 use crate::middleware::auth::HashSessionToken;
 use crate::net::tor::os_key;
@@ -36,7 +36,7 @@ use crate::shutdown::Shutdown;
 use crate::status::{MainStatus, Status};
 use crate::util::io::from_yaml_async_reader;
 use crate::util::{AsyncFileExt, Invoke};
-use crate::{Error, ResultExt};
+use crate::{Error, ErrorKind, ResultExt};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -46,6 +46,7 @@ pub struct RpcContextConfig {
     pub bind_static: Option<SocketAddr>,
     pub tor_control: Option<SocketAddr>,
     pub tor_socks: Option<SocketAddr>,
+    pub dns_bind: Option<Vec<SocketAddr>>,
     pub revision_cache_size: Option<usize>,
     pub datadir: Option<PathBuf>,
     pub log_server: Option<Url>,
@@ -55,7 +56,7 @@ impl RpcContextConfig {
         let cfg_path = path
             .as_ref()
             .map(|p| p.as_ref())
-            .unwrap_or(Path::new(crate::CONFIG_PATH));
+            .unwrap_or(Path::new(crate::util::config::CONFIG_PATH));
         if let Some(f) = File::maybe_open(cfg_path)
             .await
             .with_ctx(|_| (crate::ErrorKind::Filesystem, cfg_path.display().to_string()))?
@@ -132,6 +133,71 @@ pub struct RpcContextSeed {
     pub wifi_manager: Arc<RwLock<WpaCli>>,
 }
 
+pub struct RpcCleanReceipts {
+    cleanup_receipts: CleanupFailedReceipts,
+    packages: LockReceipt<crate::db::model::AllPackageData, ()>,
+    package: LockReceipt<crate::db::model::PackageDataEntry, String>,
+}
+
+impl RpcCleanReceipts {
+    pub async fn new<'a>(db: &'a mut impl DbHandle) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let setup = Self::setup(&mut locks);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(
+        locks: &mut Vec<patch_db::LockTargetId>,
+    ) -> impl FnOnce(&patch_db::Verifier) -> Result<Self, Error> {
+        let cleanup_receipts = CleanupFailedReceipts::setup(locks);
+
+        let packages = crate::db::DatabaseModel::new()
+            .package_data()
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        let package = crate::db::DatabaseModel::new()
+            .package_data()
+            .star()
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+        move |skeleton_key| {
+            Ok(Self {
+                cleanup_receipts: cleanup_receipts(skeleton_key)?,
+                packages: packages.verify(skeleton_key)?,
+                package: package.verify(skeleton_key)?,
+            })
+        }
+    }
+}
+
+pub struct RpcSetNginxReceipts {
+    server_info: LockReceipt<crate::db::model::ServerInfo, ()>,
+}
+
+impl RpcSetNginxReceipts {
+    pub async fn new(db: &'_ mut impl DbHandle) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let setup = Self::setup(&mut locks);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(
+        locks: &mut Vec<patch_db::LockTargetId>,
+    ) -> impl FnOnce(&patch_db::Verifier) -> Result<Self, Error> {
+        let server_info = crate::db::DatabaseModel::new()
+            .server_info()
+            .make_locker(LockType::Read)
+            .add_to_keys(locks);
+        move |skeleton_key| {
+            Ok(Self {
+                server_info: server_info.verify(skeleton_key)?,
+            })
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RpcContext(Arc<RpcContextSeed>);
 impl RpcContext {
@@ -158,6 +224,10 @@ impl RpcContext {
             crate::net::tor::os_key(&mut secret_store.acquire().await?).await?,
             base.tor_control
                 .unwrap_or(SocketAddr::from(([127, 0, 0, 1], 9051))),
+            base.dns_bind
+                .as_ref()
+                .map(|v| v.as_slice())
+                .unwrap_or(&[SocketAddr::from(([127, 0, 0, 1], 53))]),
             secret_store.clone(),
             None,
         )
@@ -203,13 +273,15 @@ impl RpcContext {
         tracing::info!("Initialized Package Managers");
         Ok(res)
     }
-    #[instrument(skip(self, db))]
-    pub async fn set_nginx_conf<Db: DbHandle>(&self, db: &mut Db) -> Result<(), Error> {
+
+    #[instrument(skip(self, db, receipts))]
+    pub async fn set_nginx_conf<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+        receipts: RpcSetNginxReceipts,
+    ) -> Result<(), Error> {
         tokio::fs::write("/etc/nginx/sites-available/default", {
-            let info = crate::db::DatabaseModel::new()
-                .server_info()
-                .get(db, true)
-                .await?;
+            let info = receipts.server_info.get(db).await?;
             format!(
                 include_str!("../nginx/main-ui.conf.template"),
                 lan_hostname = info.lan_address.host_str().unwrap(),
@@ -237,34 +309,19 @@ impl RpcContext {
         self.is_closed.store(true, Ordering::SeqCst);
         Ok(())
     }
+
     #[instrument(skip(self))]
     pub async fn cleanup(&self) -> Result<(), Error> {
         let mut db = self.db.handle();
-        crate::db::DatabaseModel::new()
-            .package_data()
-            .lock(&mut db, LockType::Write)
-            .await?;
-        for package_id in crate::db::DatabaseModel::new()
-            .package_data()
-            .keys(&mut db, true)
-            .await?
-        {
+        let receipts = RpcCleanReceipts::new(&mut db).await?;
+        for (package_id, package) in receipts.packages.get(&mut db).await?.0 {
             if let Err(e) = async {
-                let mut pde = crate::db::DatabaseModel::new()
-                    .package_data()
-                    .idx_model(&package_id)
-                    .get_mut(&mut db)
-                    .await?;
-                match pde.as_mut().ok_or_else(|| {
-                    Error::new(
-                        eyre!("Node does not exist: /package-data/{}", package_id),
-                        crate::ErrorKind::Database,
-                    )
-                })? {
+                match package {
                     PackageDataEntry::Installing { .. }
                     | PackageDataEntry::Restoring { .. }
                     | PackageDataEntry::Updating { .. } => {
-                        cleanup_failed(self, &mut db, &package_id).await?;
+                        cleanup_failed(self, &mut db, &package_id, &receipts.cleanup_receipts)
+                            .await?;
                     }
                     PackageDataEntry::Removing { .. } => {
                         uninstall(
@@ -276,30 +333,48 @@ impl RpcContext {
                         .await?;
                     }
                     PackageDataEntry::Installed {
-                        installed:
-                            InstalledPackageDataEntry {
-                                status: Status { main, .. },
-                                ..
-                            },
-                        ..
+                        installed,
+                        static_files,
+                        manifest,
                     } => {
-                        let new_main = match std::mem::replace(
-                            main,
-                            MainStatus::Stopped, /* placeholder */
-                        ) {
+                        for (volume_id, volume_info) in &*manifest.volumes {
+                            let tmp_path = to_tmp_path(volume_info.path_for(
+                                &self.datadir,
+                                &package_id,
+                                &manifest.version,
+                                &volume_id,
+                            ))
+                            .with_kind(ErrorKind::Filesystem)?;
+                            if tokio::fs::metadata(&tmp_path).await.is_ok() {
+                                tokio::fs::remove_dir_all(&tmp_path).await?;
+                            }
+                        }
+                        let status = installed.status;
+                        let main = match status.main {
                             MainStatus::BackingUp { started, .. } => {
                                 if let Some(_) = started {
-                                    MainStatus::Starting
+                                    MainStatus::Starting { restarting: false }
                                 } else {
                                     MainStatus::Stopped
                                 }
                             }
-                            MainStatus::Running { .. } => MainStatus::Starting,
-                            a => a,
+                            MainStatus::Running { .. } => {
+                                MainStatus::Starting { restarting: false }
+                            }
+                            a => a.clone(),
                         };
-                        *main = new_main;
-
-                        pde.save(&mut db).await?;
+                        let new_package = PackageDataEntry::Installed {
+                            installed: InstalledPackageDataEntry {
+                                status: Status { main, ..status },
+                                ..installed
+                            },
+                            static_files,
+                            manifest,
+                        };
+                        receipts
+                            .package
+                            .set(&mut db, new_package, &package_id)
+                            .await?;
                     }
                 }
                 Ok::<_, Error>(())
@@ -311,6 +386,58 @@ impl RpcContext {
             }
         }
         Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn clean_continuations(&self) {
+        let mut continuations = self.rpc_stream_continuations.lock().await;
+        let mut to_remove = Vec::new();
+        for (guid, cont) in &*continuations {
+            if cont.is_timed_out() {
+                to_remove.push(guid.clone());
+            }
+        }
+        for guid in to_remove {
+            continuations.remove(&guid);
+        }
+    }
+
+    #[instrument(skip(self, handler))]
+    pub async fn add_continuation(&self, guid: RequestGuid, handler: RpcContinuation) {
+        self.clean_continuations().await;
+        self.rpc_stream_continuations
+            .lock()
+            .await
+            .insert(guid, handler);
+    }
+
+    pub async fn get_continuation_handler(&self, guid: &RequestGuid) -> Option<RestHandler> {
+        let mut continuations = self.rpc_stream_continuations.lock().await;
+        if let Some(cont) = continuations.remove(guid) {
+            cont.into_handler().await
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_ws_continuation_handler(&self, guid: &RequestGuid) -> Option<RestHandler> {
+        let continuations = self.rpc_stream_continuations.lock().await;
+        if matches!(continuations.get(guid), Some(RpcContinuation::WebSocket(_))) {
+            drop(continuations);
+            self.get_continuation_handler(guid).await
+        } else {
+            None
+        }
+    }
+
+    pub async fn get_rest_continuation_handler(&self, guid: &RequestGuid) -> Option<RestHandler> {
+        let continuations = self.rpc_stream_continuations.lock().await;
+        if matches!(continuations.get(guid), Some(RpcContinuation::Rest(_))) {
+            drop(continuations);
+            self.get_continuation_handler(guid).await
+        } else {
+            None
+        }
     }
 }
 impl Context for RpcContext {

@@ -1,6 +1,6 @@
 <ion-header>
   <ion-toolbar>
-    <ion-title>{{ version }} Release Notes</ion-title>
+    <ion-title>Release Notes</ion-title>
     <ion-buttons slot="end">
       <ion-button (click)="dismiss()">
         <ion-icon slot="icon-only" name="close"></ion-icon>
@@ -10,56 +10,60 @@
 </ion-header>
 
 <ion-content class="ion-padding">
-  <h1>A whole new Embassy!</h1>
-  <p>
-    Check out the full
+  <h2>This release</h2>
+  <h4>0.3.1~1</h4>
+  <p class="note-padding">
+    View the complete
     <a
-      href="https://start9labs.medium.com/embassyos-0-3-0-f3d2d2ea016f"
+      href="https://github.com/Start9Labs/embassy-os/releases/tag/v0.3.1.1"
       target="_blank"
       noreferrer
-      >Release Notes</a
-    >.
+      >release notes</a
+    >
+    for more details.
   </p>
-  <h2>Highlights</h2>
+  <h6>Highlights</h6>
   <ul class="spaced-list">
-    <li>
-      <b>SSD Support</b> - Embassy now requires an external SSD, offering more
-      storage, better reliability, and a faster experience.
-    </li>
-    <li><b>Websockets</b> - Provides a smooth, "real-time" feel.</li>
-    <li>
-      <b>Full Embassy Backups</b> - Create encrypted backups of your Embassy and
-      all its services with a single button.
-    </li>
-    <li>
-      <b>LAN Shared Folders (for backups)</b> - Easily perform "over-the-air"
-      backups on your desktop/laptop or a drive plugged into your
-      desktop/laptop.
-    </li>
-    <li>
-      <b>Revamped User Interface</b> - The user interface has been rewritten and
-      redesigned to be more performant, understandable, and beautiful.
-    </li>
-    <li>
-      <b>Session Management</b> - View your Embassy's active sessions and log
-      out remotely.
-    </li>
-    <li>
-      <b>Alt Marketplaces</b> - Optionally connect to and browse alternative
-      service marketplaces.
-    </li>
-    <li>
-      <b>Progress Reporting</b> - View live progress of services
-      installs/updates and EmbassyOS updates.
-    </li>
-    <li>
-      <b>Health Checks</b> - View the health of your services at a glance, along
-      with helpful messages if something is wrong.
-    </li>
+    <li>Multiple bug fixes.</li>
   </ul>
 
+  <br />
+  <h2>Previous releases in this series</h2>
+  <h4>0.3.1</h4>
+  <p class="note-padding">
+    View the complete
+    <a
+      href="https://github.com/Start9Labs/embassy-os/releases/tag/v0.3.1"
+      target="_blank"
+      noreferrer
+      >release notes</a
+    >
+    for more details.
+  </p>
+  <h6>Highlights</h6>
+  <ul class="spaced-list">
+    <li>
+      Drag and drop installs. Install a service simply by dragging it into the
+      browser
+    </li>
+    <li>
+      Password reset flow. Requires physical access to the device for security
+      purposes
+    </li>
+    <li>Selective backups. Only back up the services you choose</li>
+    <li>New button to restart a service</li>
+    <li>New button to log out all sessions</li>
+    <li>New button to copy/paste service and OS logs</li>
+    <li>Significant speedup for service configuration and property viewing</li>
+    <li>Multiple bugfixes and performance improvements</li>
+  </ul>
   <div class="ion-text-center ion-padding">
-    <ion-button fill="outline" color="dark" (click)="dismiss()">
+    <ion-button
+      fill="solid"
+      color="primary"
+      (click)="dismiss()"
+      class="enter-click btn-128"
+    >
       Begin
     </ion-button>
   </div>

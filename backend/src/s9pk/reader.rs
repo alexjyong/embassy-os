@@ -6,10 +6,10 @@ use std::str::FromStr;
 use std::task::{Context, Poll};
 
 use color_eyre::eyre::eyre;
-use digest::Output;
+use digest_old::Output;
 use ed25519_dalek::PublicKey;
 use futures::TryStreamExt;
-use sha2::{Digest, Sha512};
+use sha2_old::{Digest, Sha512};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, ReadBuf, Take};
 use tracing::instrument;
@@ -153,23 +153,26 @@ impl<R: AsyncRead + AsyncSeek + Unpin> S9pkReader<R> {
         man.actions
             .0
             .iter()
-            .map(|(_, action)| action.validate(&man.volumes, &validated_image_ids))
+            .map(|(_, action)| {
+                action.validate(&man.eos_version, &man.volumes, &validated_image_ids)
+            })
             .collect::<Result<(), Error>>()?;
-        man.backup.validate(&man.volumes, &validated_image_ids)?;
+        man.backup
+            .validate(&man.eos_version, &man.volumes, &validated_image_ids)?;
         if let Some(cfg) = &man.config {
-            cfg.validate(&man.volumes, &validated_image_ids)?;
+            cfg.validate(&man.eos_version, &man.volumes, &validated_image_ids)?;
         }
         man.health_checks
-            .validate(&man.volumes, &validated_image_ids)?;
+            .validate(&man.eos_version, &man.volumes, &validated_image_ids)?;
         man.interfaces.validate()?;
         man.main
-            .validate(&man.volumes, &validated_image_ids, false)
+            .validate(&man.eos_version, &man.volumes, &validated_image_ids, false)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Main"))?;
         man.migrations
-            .validate(&man.volumes, &validated_image_ids)?;
+            .validate(&man.eos_version, &man.volumes, &validated_image_ids)?;
         if let Some(props) = &man.properties {
             props
-                .validate(&man.volumes, &validated_image_ids, true)
+                .validate(&man.eos_version, &man.volumes, &validated_image_ids, true)
                 .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Properties"))?;
         }
         man.volumes.validate(&man.interfaces)?;
@@ -304,5 +307,12 @@ impl<R: AsyncRead + AsyncSeek + Unpin> S9pkReader<R> {
 
     pub async fn assets<'a>(&'a mut self) -> Result<ReadHandle<'a, R>, Error> {
         Ok(self.read_handle(self.toc.assets).await?)
+    }
+
+    pub async fn scripts<'a>(&'a mut self) -> Result<Option<ReadHandle<'a, R>>, Error> {
+        Ok(match self.toc.scripts {
+            None => None,
+            Some(a) => Some(self.read_handle(a).await?),
+        })
     }
 }

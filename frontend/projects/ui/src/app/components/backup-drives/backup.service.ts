@@ -13,10 +13,10 @@ import { getErrorMessage, Emver } from '@start9labs/shared'
   providedIn: 'root',
 })
 export class BackupService {
-  cifs: MappedBackupTarget<CifsBackupTarget>[]
-  drives: MappedBackupTarget<DiskBackupTarget>[]
+  cifs: MappedBackupTarget<CifsBackupTarget>[] = []
+  drives: MappedBackupTarget<DiskBackupTarget>[] = []
   loading = true
-  loadingError: string | IonicSafeString
+  loadingError: string | IonicSafeString = ''
 
   constructor(
     private readonly embassyApi: ApiService,
@@ -48,7 +48,7 @@ export class BackupService {
             entry: drive as DiskBackupTarget,
           }
         })
-    } catch (e) {
+    } catch (e: any) {
       this.loadingError = getErrorMessage(e)
     } finally {
       this.loading = false
@@ -56,8 +56,7 @@ export class BackupService {
   }
 
   hasValidBackup(target: BackupTarget): boolean {
-    return [0, 1].includes(
-      this.emver.compare(target['embassy-os']?.version, '0.3.0'),
-    )
+    const backup = target['embassy-os']
+    return !!backup && this.emver.compare(backup.version, '0.3.0') !== -1
   }
 }

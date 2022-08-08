@@ -1,16 +1,49 @@
 import { Injectable } from '@angular/core'
-import { BehaviorSubject } from 'rxjs'
+import { Emver } from '@start9labs/shared'
+import { BehaviorSubject, combineLatest } from 'rxjs'
+import { distinctUntilChanged, map } from 'rxjs/operators'
+
 import { MarketplaceEOS } from 'src/app/services/api/api.types'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { Emver } from '@start9labs/shared'
 import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
+import { getServerInfo } from 'src/app/util/get-server-info'
 
 @Injectable({
   providedIn: 'root',
 })
 export class EOSService {
-  eos: MarketplaceEOS
+  eos?: MarketplaceEOS
   updateAvailable$ = new BehaviorSubject<boolean>(false)
+
+  readonly updating$ = this.patch.watch$('server-info', 'status-info').pipe(
+    map(status => !!status['update-progress'] || status.updated),
+    distinctUntilChanged(),
+  )
+
+  readonly backingUp$ = this.patch
+    .watch$('server-info', 'status-info', 'backup-progress')
+    .pipe(
+      map(obj => !!obj),
+      distinctUntilChanged(),
+    )
+
+  readonly updatingOrBackingUp$ = combineLatest([
+    this.updating$,
+    this.backingUp$,
+  ]).pipe(
+    map(([updating, backingUp]) => {
+      return updating || backingUp
+    }),
+  )
+
+  readonly showUpdate$ = combineLatest([
+    this.updateAvailable$,
+    this.updating$,
+  ]).pipe(
+    map(([available, updating]) => {
+      return available && !updating
+    }),
+  )
 
   constructor(
     private readonly api: ApiService,
@@ -19,15 +52,12 @@ export class EOSService {
   ) {}
 
   async getEOS(): Promise<boolean> {
+    const { id, version } = await getServerInfo(this.patch)
     this.eos = await this.api.getEos({
-      'eos-version-compat':
-        this.patch.getData()['server-info']['eos-version-compat'],
+      'server-id': id,
+      'eos-version': version,
     })
-    const updateAvailable =
-      this.emver.compare(
-        this.eos.version,
-        this.patch.getData()['server-info'].version,
-      ) === 1
+    const updateAvailable = this.emver.compare(this.eos.version, version) === 1
     this.updateAvailable$.next(updateAvailable)
     return updateAvailable
   }

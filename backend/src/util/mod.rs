@@ -1,31 +1,29 @@
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
-use std::str::FromStr;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
-use ::serde::{Deserialize, Deserializer, Serialize, Serializer};
 use async_trait::async_trait;
 use clap::ArgMatches;
 use color_eyre::eyre::{self, eyre};
-use digest::Digest;
 use fd_lock_rs::FdLock;
-use futures::future::BoxFuture;
-use futures::FutureExt;
+use helpers::canonicalize;
+pub use helpers::NonDetachingJoinHandle;
 use lazy_static::lazy_static;
-use patch_db::{HasModel, Model};
+pub use models::Version;
+use pin_project::pin_project;
+use sha2_old::Digest;
 use tokio::fs::File;
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock};
-use tokio::task::{JoinError, JoinHandle};
 use tracing::instrument;
 
 use crate::shutdown::Shutdown;
-use crate::{Error, ResultExt as _};
-
+use crate::{Error, ErrorKind, ResultExt as _};
+pub mod config;
 pub mod io;
 pub mod logger;
 pub mod serde;
@@ -122,107 +120,6 @@ impl<T> SNone<T> {
 }
 impl<T> SOption<T> for SNone<T> {}
 
-#[derive(Debug, Clone)]
-pub struct Version {
-    version: emver::Version,
-    string: String,
-}
-impl Version {
-    pub fn as_str(&self) -> &str {
-        self.string.as_str()
-    }
-}
-impl std::fmt::Display for Version {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.string)
-    }
-}
-impl std::str::FromStr for Version {
-    type Err = <emver::Version as FromStr>::Err;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Version {
-            string: s.to_owned(),
-            version: s.parse()?,
-        })
-    }
-}
-impl From<emver::Version> for Version {
-    fn from(v: emver::Version) -> Self {
-        Version {
-            string: v.to_string(),
-            version: v,
-        }
-    }
-}
-impl From<Version> for emver::Version {
-    fn from(v: Version) -> Self {
-        v.version
-    }
-}
-impl Default for Version {
-    fn default() -> Self {
-        Self::from(emver::Version::default())
-    }
-}
-impl Deref for Version {
-    type Target = emver::Version;
-    fn deref(&self) -> &Self::Target {
-        &self.version
-    }
-}
-impl AsRef<emver::Version> for Version {
-    fn as_ref(&self) -> &emver::Version {
-        &self.version
-    }
-}
-impl AsRef<str> for Version {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-impl PartialEq for Version {
-    fn eq(&self, other: &Version) -> bool {
-        self.version.eq(&other.version)
-    }
-}
-impl Eq for Version {}
-impl PartialOrd for Version {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.version.partial_cmp(&other.version)
-    }
-}
-impl Ord for Version {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.version.cmp(&other.version)
-    }
-}
-impl Hash for Version {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.version.hash(state)
-    }
-}
-impl<'de> Deserialize<'de> for Version {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let string = String::deserialize(deserializer)?;
-        let version = emver::Version::from_str(&string).map_err(::serde::de::Error::custom)?;
-        Ok(Self { string, version })
-    }
-}
-impl Serialize for Version {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.string.serialize(serializer)
-    }
-}
-impl HasModel for Version {
-    type Model = Model<Version>;
-}
-
 #[async_trait]
 pub trait AsyncFileExt: Sized {
     async fn maybe_open<P: AsRef<Path> + Send + Sync>(path: P) -> std::io::Result<Option<Self>>;
@@ -289,11 +186,13 @@ impl<T> Container<T> {
     }
 }
 
-pub struct HashWriter<H: Digest, W: std::io::Write> {
+#[pin_project]
+pub struct HashWriter<H: Digest, W: tokio::io::AsyncWrite> {
     hasher: H,
+    #[pin]
     writer: W,
 }
-impl<H: Digest, W: std::io::Write> HashWriter<H, W> {
+impl<H: Digest, W: tokio::io::AsyncWrite> HashWriter<H, W> {
     pub fn new(hasher: H, writer: W) -> Self {
         HashWriter { hasher, writer }
     }
@@ -307,14 +206,31 @@ impl<H: Digest, W: std::io::Write> HashWriter<H, W> {
         &mut self.writer
     }
 }
-impl<H: Digest, W: std::io::Write> std::io::Write for HashWriter<H, W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let written = self.writer.write(buf)?;
-        self.hasher.update(&buf[..written]);
-        Ok(written)
+impl<H: Digest, W: tokio::io::AsyncWrite> tokio::io::AsyncWrite for HashWriter<H, W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.project();
+        let written = tokio::io::AsyncWrite::poll_write(this.writer, cx, &buf);
+        match written {
+            // only update the hasher once
+            Poll::Ready(res) => {
+                if let Ok(n) = res {
+                    this.hasher.update(&buf[..n]);
+                }
+                Poll::Ready(res)
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.writer.flush()
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<std::io::Result<()>> {
+        self.project().writer.poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<std::io::Result<()>> {
+        self.project().writer.poll_shutdown(cx)
     }
 }
 
@@ -330,31 +246,6 @@ where
     type IntoIter = <T as IntoIterator>::IntoIter;
     fn into_iter(self) -> <Self as IntoDoubleEndedIterator<U>>::IntoIter {
         IntoIterator::into_iter(self)
-    }
-}
-
-#[pin_project::pin_project(PinnedDrop)]
-pub struct NonDetachingJoinHandle<T>(#[pin] JoinHandle<T>);
-impl<T> From<JoinHandle<T>> for NonDetachingJoinHandle<T> {
-    fn from(t: JoinHandle<T>) -> Self {
-        NonDetachingJoinHandle(t)
-    }
-}
-#[pin_project::pinned_drop]
-impl<T> PinnedDrop for NonDetachingJoinHandle<T> {
-    fn drop(self: std::pin::Pin<&mut Self>) {
-        let this = self.project();
-        this.0.into_ref().get_ref().abort()
-    }
-}
-impl<T> Future for NonDetachingJoinHandle<T> {
-    type Output = Result<T, JoinError>;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let this = self.project();
-        this.0.poll(cx)
     }
 }
 
@@ -381,40 +272,6 @@ impl<F: FnOnce() -> T, T> Drop for GeneralGuard<F, T> {
     }
 }
 
-pub async fn canonicalize(
-    path: impl AsRef<Path> + Send + Sync,
-    create_parent: bool,
-) -> Result<PathBuf, Error> {
-    fn create_canonical_folder<'a>(
-        path: impl AsRef<Path> + Send + Sync + 'a,
-    ) -> BoxFuture<'a, Result<PathBuf, Error>> {
-        async move {
-            let path = canonicalize(path, true).await?;
-            tokio::fs::create_dir(&path)
-                .await
-                .with_ctx(|_| (crate::ErrorKind::Filesystem, path.display().to_string()))?;
-            Ok(path)
-        }
-        .boxed()
-    }
-    let path = path.as_ref();
-    if tokio::fs::metadata(path).await.is_err() {
-        if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
-            if create_parent && tokio::fs::metadata(parent).await.is_err() {
-                return Ok(create_canonical_folder(parent).await?.join(file_name));
-            } else {
-                return Ok(tokio::fs::canonicalize(parent)
-                    .await
-                    .with_ctx(|_| (crate::ErrorKind::Filesystem, parent.display().to_string()))?
-                    .join(file_name));
-            }
-        }
-    }
-    tokio::fs::canonicalize(&path)
-        .await
-        .with_ctx(|_| (crate::ErrorKind::Filesystem, path.display().to_string()))
-}
-
 pub struct FileLock(OwnedMutexGuard<()>, Option<FdLock<File>>);
 impl Drop for FileLock {
     fn drop(&mut self) {
@@ -430,7 +287,9 @@ impl FileLock {
             static ref INTERNAL_LOCKS: Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> =
                 Mutex::new(BTreeMap::new());
         }
-        let path = canonicalize(path.as_ref(), true).await?;
+        let path = canonicalize(path.as_ref(), true)
+            .await
+            .with_kind(ErrorKind::Filesystem)?;
         let mut internal_locks = INTERNAL_LOCKS.lock().await;
         if !internal_locks.contains_key(&path) {
             internal_locks.insert(path.clone(), Arc::new(Mutex::new(())));
@@ -468,60 +327,5 @@ impl FileLock {
                 .with_kind(crate::ErrorKind::Filesystem)?;
         }
         Ok(())
-    }
-}
-
-pub struct AtomicFile {
-    tmp_path: PathBuf,
-    path: PathBuf,
-    file: File,
-}
-impl AtomicFile {
-    pub async fn new(path: impl AsRef<Path> + Send + Sync) -> Result<Self, Error> {
-        let path = canonicalize(&path, true).await?;
-        let tmp_path = if let (Some(parent), Some(file_name)) =
-            (path.parent(), path.file_name().and_then(|f| f.to_str()))
-        {
-            parent.join(format!(".{}.tmp", file_name))
-        } else {
-            return Err(Error::new(
-                eyre!("invalid path: {}", path.display()),
-                crate::ErrorKind::Filesystem,
-            ));
-        };
-        let file = File::create(&tmp_path)
-            .await
-            .with_ctx(|_| (crate::ErrorKind::Filesystem, tmp_path.display().to_string()))?;
-        Ok(Self {
-            tmp_path,
-            path,
-            file,
-        })
-    }
-
-    pub async fn save(mut self) -> Result<(), Error> {
-        use tokio::io::AsyncWriteExt;
-        self.file.flush().await?;
-        self.file.shutdown().await?;
-        self.file.sync_all().await?;
-        tokio::fs::rename(&self.tmp_path, &self.path)
-            .await
-            .with_ctx(|_| {
-                (
-                    crate::ErrorKind::Filesystem,
-                    format!("mv {} -> {}", self.tmp_path.display(), self.path.display()),
-                )
-            })
-    }
-}
-impl std::ops::Deref for AtomicFile {
-    type Target = File;
-    fn deref(&self) -> &Self::Target {
-        &self.file
-    }
-}
-impl std::ops::DerefMut for AtomicFile {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.file
     }
 }

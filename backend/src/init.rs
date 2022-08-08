@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use patch_db::{DbHandle, LockReceipt, LockType};
 use tokio::process::Command;
 
 use crate::context::rpc::RpcContextConfig;
@@ -7,6 +10,62 @@ use crate::util::Invoke;
 use crate::Error;
 
 pub const SYSTEM_REBUILD_PATH: &str = "/embassy-os/system-rebuild";
+pub const STANDBY_MODE_PATH: &str = "/embassy-os/standby";
+
+pub async fn check_time_is_synchronized() -> Result<bool, Error> {
+    Ok(String::from_utf8(
+        Command::new("timedatectl")
+            .arg("show")
+            .arg("-p")
+            .arg("NTPSynchronized")
+            .invoke(crate::ErrorKind::Unknown)
+            .await?,
+    )?
+    .trim()
+        == "NTPSynchronized=yes")
+}
+
+pub struct InitReceipts {
+    pub server_version: LockReceipt<crate::util::Version, ()>,
+    pub version_range: LockReceipt<emver::VersionRange, ()>,
+    pub last_wifi_region: LockReceipt<Option<isocountry::CountryCode>, ()>,
+    pub status_info: LockReceipt<ServerStatus, ()>,
+}
+impl InitReceipts {
+    pub async fn new(db: &mut impl DbHandle) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let server_version = crate::db::DatabaseModel::new()
+            .server_info()
+            .version()
+            .make_locker(LockType::Write)
+            .add_to_keys(&mut locks);
+        let version_range = crate::db::DatabaseModel::new()
+            .server_info()
+            .eos_version_compat()
+            .make_locker(LockType::Write)
+            .add_to_keys(&mut locks);
+        let last_wifi_region = crate::db::DatabaseModel::new()
+            .server_info()
+            .last_wifi_region()
+            .make_locker(LockType::Write)
+            .add_to_keys(&mut locks);
+        let status_info = crate::db::DatabaseModel::new()
+            .server_info()
+            .status_info()
+            .into_model()
+            .make_locker(LockType::Write)
+            .add_to_keys(&mut locks);
+
+        let skeleton_key = db.lock_all(locks).await?;
+        Ok(Self {
+            server_version: server_version.verify(&skeleton_key)?,
+            version_range: version_range.verify(&skeleton_key)?,
+            status_info: status_info.verify(&skeleton_key)?,
+            last_wifi_region: last_wifi_region.verify(&skeleton_key)?,
+        })
+    }
+}
 
 pub async fn init(cfg: &RpcContextConfig, product_key: &str) -> Result<(), Error> {
     let should_rebuild = tokio::fs::metadata(SYSTEM_REBUILD_PATH).await.is_ok();
@@ -67,44 +126,52 @@ pub async fn init(cfg: &RpcContextConfig, product_key: &str) -> Result<(), Error
         tracing::info!("Loaded Package Docker Images");
     }
 
-    crate::ssh::sync_keys_from_db(&secret_store, "/root/.ssh/authorized_keys").await?;
+    crate::ssh::sync_keys_from_db(&secret_store, "/home/start9/.ssh/authorized_keys").await?;
     tracing::info!("Synced SSH Keys");
     let db = cfg.db(&secret_store, product_key).await?;
 
     let mut handle = db.handle();
+    let receipts = InitReceipts::new(&mut handle).await?;
 
     crate::net::wifi::synchronize_wpa_supplicant_conf(
         &cfg.datadir().join("main"),
-        &*crate::db::DatabaseModel::new()
-            .server_info()
-            .last_wifi_region()
-            .get(&mut handle, false)
-            .await
-            .map_err(|_e| {
-                Error::new(
-                    color_eyre::eyre::eyre!("Could not find the last wifi region"),
-                    crate::ErrorKind::NotFound,
-                )
-            })?,
+        &receipts.last_wifi_region.get(&mut handle).await?,
     )
     .await?;
     tracing::info!("Synchronized wpa_supplicant.conf");
-    let mut info = crate::db::DatabaseModel::new()
-        .server_info()
-        .get_mut(&mut handle)
+    receipts
+        .status_info
+        .set(
+            &mut handle,
+            ServerStatus {
+                updated: false,
+                update_progress: None,
+                backup_progress: None,
+            },
+        )
         .await?;
-    info.status_info = ServerStatus {
-        backing_up: false,
-        updated: false,
-        update_progress: None,
-    };
-    info.save(&mut handle).await?;
 
-    crate::version::init(&mut handle).await?;
+    let mut warn_time_not_synced = true;
+    for _ in 0..60 {
+        if check_time_is_synchronized().await? {
+            warn_time_not_synced = false;
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    if warn_time_not_synced {
+        tracing::warn!("Timed out waiting for system time to synchronize");
+    } else {
+        tracing::info!("Syncronized system clock");
+    }
+
+    crate::version::init(&mut handle, &receipts).await?;
 
     if should_rebuild {
         tokio::fs::remove_file(SYSTEM_REBUILD_PATH).await?;
     }
+
+    tracing::info!("System initialized.");
 
     Ok(())
 }

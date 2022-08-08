@@ -3,19 +3,19 @@ import {
   AlertController,
   LoadingController,
   NavController,
-  IonicSafeString,
   ModalController,
 } from '@ionic/angular'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
 import { ActivatedRoute } from '@angular/router'
 import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 import { Observable, of } from 'rxjs'
-import { filter, map, take } from 'rxjs/operators'
-import { WizardBaker } from 'src/app/components/install-wizard/prebaked-wizards'
-import { wizardModal } from 'src/app/components/install-wizard/install-wizard.component'
+import { filter, take } from 'rxjs/operators'
 import { exists, isEmptyObject, ErrorToastService } from '@start9labs/shared'
 import { EOSService } from 'src/app/services/eos.service'
-import { ServerStatus } from 'src/app/services/patch-db/data-model'
+import { LocalStorageService } from 'src/app/services/local-storage.service'
+import { RecoveredPackageDataEntry } from 'src/app/services/patch-db/data-model'
+import { OSUpdatePage } from 'src/app/modals/os-update/os-update.page'
+import { getAllPackages } from '../../../util/get-package-data'
 
 @Component({
   selector: 'server-show',
@@ -23,27 +23,33 @@ import { ServerStatus } from 'src/app/services/patch-db/data-model'
   styleUrls: ['server-show.page.scss'],
 })
 export class ServerShowPage {
-  ServerStatus = ServerStatus
-  hasRecoveredPackage: boolean
+  hasRecoveredPackage = false
+  clicks = 0
+
+  readonly server$ = this.patch.watch$('server-info')
+  readonly ui$ = this.patch.watch$('ui')
+  readonly connected$ = this.patch.connected$
+  readonly showUpdate$ = this.eosService.showUpdate$
+  readonly showDiskRepair$ = this.localStorageService.showDiskRepair$
 
   constructor(
     private readonly alertCtrl: AlertController,
     private readonly modalCtrl: ModalController,
-    private readonly wizardBaker: WizardBaker,
     private readonly loadingCtrl: LoadingController,
     private readonly errToast: ErrorToastService,
     private readonly embassyApi: ApiService,
     private readonly navCtrl: NavController,
     private readonly route: ActivatedRoute,
-    public readonly eosService: EOSService,
-    public readonly patch: PatchDbService,
+    private readonly patch: PatchDbService,
+    private readonly eosService: EOSService,
+    private readonly localStorageService: LocalStorageService,
   ) {}
 
   ngOnInit() {
     this.patch
       .watch$('recovered-packages')
       .pipe(filter(exists), take(1))
-      .subscribe(rps => {
+      .subscribe((rps: { [id: string]: RecoveredPackageDataEntry }) => {
         this.hasRecoveredPackage = !isEmptyObject(rps)
       })
   }
@@ -58,26 +64,19 @@ export class ServerShowPage {
       })
       await alert.present()
     } else {
-      const {
-        version,
-        headline,
-        'release-notes': releaseNotes,
-      } = this.eosService.eos
-
-      await wizardModal(
-        this.modalCtrl,
-        this.wizardBaker.updateOS({
-          version,
-          headline,
-          releaseNotes,
-        }),
-      )
+      const modal = await this.modalCtrl.create({
+        componentProps: {
+          releaseNotes: this.eosService.eos?.['release-notes'],
+        },
+        component: OSUpdatePage,
+      })
+      modal.present()
     }
   }
 
   async presentAlertRestart() {
     const alert = await this.alertCtrl.create({
-      header: 'Confirm',
+      header: 'Restart',
       message:
         'Are you sure you want to restart your Embassy? It can take several minutes to come back online.',
       buttons: [
@@ -101,7 +100,7 @@ export class ServerShowPage {
     const alert = await this.alertCtrl.create({
       header: 'Warning',
       message:
-        'Are you sure you want to power down your Embassy? This can take several minutes, and your Embassy will not come back online automatically. To power on again, You will need to physically unplug your Embassy and plug it back in.',
+        'Are you sure you want to power down your Embassy? This can take several minutes, and your Embassy will not come back online automatically. To power on again, You will need to physically unplug your Embassy and plug it back in',
       buttons: [
         {
           text: 'Cancel',
@@ -115,17 +114,17 @@ export class ServerShowPage {
           cssClass: 'enter-click',
         },
       ],
+      cssClass: 'alert-warning-message',
     })
     await alert.present()
   }
 
   async presentAlertSystemRebuild() {
-    const minutes = Object.keys(this.patch.getData()['package-data']).length * 2
+    const localPkgs = await getAllPackages(this.patch)
+    const minutes = Object.keys(localPkgs).length * 2
     const alert = await this.alertCtrl.create({
-      header: 'System Rebuild',
-      message: new IonicSafeString(
-        `<ion-text color="warning">Warning:</ion-text> This action will tear down all service containers and rebuild them from scratch. No data will be deleted. This action is useful if your system gets into a bad state, and it should only be performed if you are experiencing general performance or reliability issues. It may take up to ${minutes} minutes to complete. During this time, you will lose all connectivity to your Embassy.`,
-      ),
+      header: 'Warning',
+      message: `This action will tear down all service containers and rebuild them from scratch. No data will be deleted. This action is useful if your system gets into a bad state, and it should only be performed if you are experiencing general performance or reliability issues. It may take up to ${minutes} minutes to complete. During this time, you will lose all connectivity to your Embassy.`,
       buttons: [
         {
           text: 'Cancel',
@@ -139,21 +138,51 @@ export class ServerShowPage {
           cssClass: 'enter-click',
         },
       ],
+      cssClass: 'alert-warning-message',
+    })
+    await alert.present()
+  }
+
+  async presentAlertRepairDisk() {
+    const alert = await this.alertCtrl.create({
+      header: 'Warning',
+      message: `<p>This action will attempt to preform a disk repair operation and system reboot. No data will be deleted. This action should only be executed if directed by a Start9 support specialist. We recommend backing up your device before preforming this action.</p><p>If anything happens to the device during the reboot (between the bep and chime), such as loosing power, a power surge, unplugging the drive, or unplugging the Embassy, the filesystem <i>will</i> be in an unrecoverable state. Please proceed with caution.</p>`,
+      buttons: [
+        {
+          text: 'Cancel',
+          role: 'cancel',
+        },
+        {
+          text: 'Repair',
+          handler: () => {
+            try {
+              this.embassyApi.repairDisk({}).then(_ => {
+                this.restart()
+              })
+            } catch (e: any) {
+              this.errToast.present(e)
+            }
+          },
+          cssClass: 'enter-click',
+        },
+      ],
+      cssClass: 'alert-warning-message',
     })
     await alert.present()
   }
 
   private async restart() {
+    const action = 'Restart'
+
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
-      message: 'Restarting...',
-      cssClass: 'loader',
+      message: `Beginning ${action}...`,
     })
     await loader.present()
 
     try {
       await this.embassyApi.restartServer({})
-    } catch (e) {
+      this.presentAlertInProgress(action, ` until ${action} completes.`)
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -161,16 +190,20 @@ export class ServerShowPage {
   }
 
   private async shutdown() {
+    const action = 'Shutdown'
+
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
-      message: 'Shutting down...',
-      cssClass: 'loader',
+      message: `Beginning ${action}...`,
     })
     await loader.present()
 
     try {
       await this.embassyApi.shutdownServer({})
-    } catch (e) {
+      this.presentAlertInProgress(
+        action,
+        '.<br /><br /><b>You will need to physically power cycle the device to regain connectivity.</b>',
+      )
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -178,16 +211,17 @@ export class ServerShowPage {
   }
 
   private async systemRebuild() {
+    const action = 'System Rebuild'
+
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
-      message: 'Hard Restarting...',
-      cssClass: 'loader',
+      message: `Beginning ${action}...`,
     })
     await loader.present()
 
     try {
       await this.embassyApi.systemRebuild({})
-    } catch (e) {
+      this.presentAlertInProgress(action, ` until ${action} completes.`)
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -196,22 +230,55 @@ export class ServerShowPage {
 
   private async checkForEosUpdate(): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Checking for updates',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       const updateAvailable = await this.eosService.getEOS()
+
+      await loader.dismiss()
+
       if (updateAvailable) {
         this.updateEos()
+      } else {
+        this.presentAlertLatest()
       }
-    } catch (e) {
+    } catch (e: any) {
+      await loader.dismiss()
       this.errToast.present(e)
-    } finally {
-      loader.dismiss()
     }
+  }
+
+  private async presentAlertLatest() {
+    const alert = await this.alertCtrl.create({
+      header: 'Up to date!',
+      message: 'You are on the latest version of EmbassyOS.',
+      buttons: [
+        {
+          text: 'OK',
+          role: 'cancel',
+          cssClass: 'enter-click',
+        },
+      ],
+      cssClass: 'alert-success-message',
+    })
+    alert.present()
+  }
+
+  private async presentAlertInProgress(verb: string, message: string) {
+    const alert = await this.alertCtrl.create({
+      header: `${verb} In Progress...`,
+      message: `Stopping all services gracefully. This can take a while.<br /><br />Your Embassy will then <b>♫ play a melody ♫</b> and become unreachable${message}`,
+      buttons: [
+        {
+          text: 'OK',
+          role: 'cancel',
+          cssClass: 'enter-click',
+        },
+      ],
+    })
+    alert.present()
   }
 
   settings: ServerSettings = {
@@ -232,14 +299,7 @@ export class ServerShowPage {
         action: () =>
           this.navCtrl.navigateForward(['restore'], { relativeTo: this.route }),
         detail: true,
-        disabled: this.patch
-          .watch$('server-info', 'status-info')
-          .pipe(
-            map(
-              status =>
-                status && (status['backing-up'] || !!status['update-progress']),
-            ),
-          ),
+        disabled: this.eosService.updatingOrBackingUp$,
       },
     ],
     Settings: [
@@ -252,17 +312,7 @@ export class ServerShowPage {
             ? this.updateEos()
             : this.checkForEosUpdate(),
         detail: false,
-        disabled: this.patch
-          .watch$('server-info', 'status-info')
-          .pipe(
-            map(
-              status =>
-                status &&
-                (status['backing-up'] ||
-                  !!status['update-progress'] ||
-                  status.updated),
-            ),
-          ),
+        disabled: this.eosService.updatingOrBackingUp$,
       },
       {
         title: 'Preferences',
@@ -303,9 +353,20 @@ export class ServerShowPage {
         disabled: of(false),
       },
       {
+        title: 'Sideload Service',
+        description: `Manually install a service`,
+        icon: 'push-outline',
+        action: () =>
+          this.navCtrl.navigateForward(['sideload'], {
+            relativeTo: this.route,
+          }),
+        detail: true,
+        disabled: of(false),
+      },
+      {
         title: 'Marketplace Settings',
         description: 'Add or remove marketplaces',
-        icon: 'storefront',
+        icon: 'storefront-outline',
         action: () =>
           this.navCtrl.navigateForward(['marketplaces'], {
             relativeTo: this.route,
@@ -355,7 +416,8 @@ export class ServerShowPage {
       },
       {
         title: 'Kernel Logs',
-        description: 'Diagnostic log stream for device drivers',
+        description:
+          'Diagnostic log stream for device drivers and other kernel processes',
         icon: 'receipt-outline',
         action: () =>
           this.navCtrl.navigateForward(['kernel-logs'], {
@@ -418,11 +480,30 @@ export class ServerShowPage {
         detail: false,
         disabled: of(false),
       },
+      {
+        title: 'Repair Disk',
+        description: '',
+        icon: 'medkit-outline',
+        action: () => this.presentAlertRepairDisk(),
+        detail: false,
+        disabled: of(false),
+      },
     ],
   }
 
   asIsOrder() {
     return 0
+  }
+
+  async addClick() {
+    this.clicks++
+    if (this.clicks >= 5) {
+      this.clicks = 0
+      const newVal = await this.localStorageService.toggleShowDiskRepair()
+    }
+    setTimeout(() => {
+      this.clicks = Math.max(this.clicks - 1, 0)
+    }, 10000)
   }
 }
 

@@ -1,95 +1,189 @@
-import { ChangeDetectionStrategy, Component, Input } from '@angular/core'
-import { AlertController, ModalController, NavController } from '@ionic/angular'
+import {
+  ChangeDetectionStrategy,
+  Component,
+  Inject,
+  Input,
+} from '@angular/core'
+import { AlertController, LoadingController } from '@ionic/angular'
 import {
   AbstractMarketplaceService,
   MarketplacePkg,
 } from '@start9labs/marketplace'
-import { pauseFor } from '@start9labs/shared'
-
-import { PackageState } from 'src/app/types/package-state'
+import { Emver, ErrorToastService, isEmptyObject } from '@start9labs/shared'
 import {
-  Manifest,
   PackageDataEntry,
+  PackageState,
 } from 'src/app/services/patch-db/data-model'
-import { wizardModal } from 'src/app/components/install-wizard/install-wizard.component'
-import { WizardBaker } from 'src/app/components/install-wizard/prebaked-wizards'
 import { LocalStorageService } from 'src/app/services/local-storage.service'
+import { MarketplaceService } from 'src/app/services/marketplace.service'
+import { hasCurrentDeps } from 'src/app/util/has-deps'
+import { ApiService } from 'src/app/services/api/embassy-api.service'
+import { Breakages } from 'src/app/services/api/api.types'
+import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
+import { getAllPackages } from 'src/app/util/get-package-data'
+import { firstValueFrom } from 'rxjs'
 
 @Component({
   selector: 'marketplace-show-controls',
   templateUrl: 'marketplace-show-controls.component.html',
+  styleUrls: ['./marketplace-show-controls.page.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class MarketplaceShowControlsComponent {
   @Input()
-  pkg: MarketplacePkg
+  pkg!: MarketplacePkg
 
   @Input()
-  localPkg: PackageDataEntry
+  localPkg!: PackageDataEntry | null
+
+  readonly showDevTools$ = this.localStorageService.showDevTools$
 
   readonly PackageState = PackageState
 
   constructor(
     private readonly alertCtrl: AlertController,
-    private readonly modalCtrl: ModalController,
-    private readonly wizardBaker: WizardBaker,
-    private readonly navCtrl: NavController,
-    private readonly marketplaceService: AbstractMarketplaceService,
-    public readonly localStorageService: LocalStorageService,
+    private readonly localStorageService: LocalStorageService,
+    @Inject(AbstractMarketplaceService)
+    private readonly marketplaceService: MarketplaceService,
+    private readonly loadingCtrl: LoadingController,
+    private readonly emver: Emver,
+    private readonly errToast: ErrorToastService,
+    private readonly embassyApi: ApiService,
+    private readonly patch: PatchDbService,
   ) {}
 
-  get version(): string {
+  get localVersion(): string {
     return this.localPkg?.manifest.version || ''
   }
 
   async tryInstall() {
-    const { id, title, version, alerts } = this.pkg.manifest
-
-    if (!alerts.install) {
-      this.marketplaceService.install(id, version).subscribe()
+    if (!this.localPkg) {
+      this.alertInstall()
     } else {
+      if (
+        this.emver.compare(this.localVersion, this.pkg.manifest.version) !==
+          0 &&
+        hasCurrentDeps(this.localPkg)
+      ) {
+        this.dryInstall()
+      } else {
+        this.install()
+      }
+    }
+  }
+
+  private async dryInstall() {
+    const loader = await this.loadingCtrl.create({
+      message: 'Checking dependent services...',
+    })
+    await loader.present()
+
+    const { id, version } = this.pkg.manifest
+
+    try {
+      const breakages = await this.embassyApi.dryUpdatePackage({
+        id,
+        version: `${version}`,
+      })
+
+      if (isEmptyObject(breakages)) {
+        this.install(loader)
+      } else {
+        await loader.dismiss()
+        const proceed = await this.presentAlertBreakages(breakages)
+        if (proceed) {
+          this.install()
+        }
+      }
+    } catch (e: any) {
+      this.errToast.present(e)
+    }
+  }
+
+  private async alertInstall() {
+    const installAlert = this.pkg.manifest.alerts.install
+
+    if (!installAlert) return this.install()
+
+    const alert = await this.alertCtrl.create({
+      header: 'Alert',
+      message: installAlert,
+      buttons: [
+        {
+          text: 'Cancel',
+          role: 'cancel',
+        },
+        {
+          text: 'Install',
+          handler: () => {
+            this.install()
+          },
+          cssClass: 'enter-click',
+        },
+      ],
+    })
+    await alert.present()
+  }
+
+  private async install(loader?: HTMLIonLoadingElement) {
+    const message = 'Beginning Install...'
+    if (loader) {
+      loader.message = message
+    } else {
+      loader = await this.loadingCtrl.create({ message })
+      await loader.present()
+    }
+
+    const { id, version } = this.pkg.manifest
+
+    try {
+      await firstValueFrom(
+        this.marketplaceService.installPackage({
+          id,
+          'version-spec': `=${version}`,
+        }),
+      )
+    } catch (e: any) {
+      this.errToast.present(e)
+    } finally {
+      loader.dismiss()
+    }
+  }
+
+  private async presentAlertBreakages(breakages: Breakages): Promise<boolean> {
+    let message: string =
+      'As a result of this update, the following services will no longer work properly and may crash:<ul>'
+    const localPkgs = await getAllPackages(this.patch)
+    const bullets = Object.keys(breakages).map(id => {
+      const title = localPkgs[id].manifest.title
+      return `<li><b>${title}</b></li>`
+    })
+    message = `${message}${bullets.join('')}</ul>`
+
+    return new Promise(async resolve => {
       const alert = await this.alertCtrl.create({
-        header: title,
-        subHeader: version,
-        message: alerts.install,
+        header: 'Warning',
+        message,
         buttons: [
           {
             text: 'Cancel',
             role: 'cancel',
+            handler: () => {
+              resolve(false)
+            },
           },
           {
-            text: 'Install',
-            handler: () =>
-              this.marketplaceService.install(id, version).subscribe(),
+            text: 'Continue',
+            handler: () => {
+              resolve(true)
+            },
+            cssClass: 'enter-click',
           },
         ],
+        cssClass: 'alert-warning-message',
       })
+
       await alert.present()
-    }
-  }
-
-  async presentModal(action: 'update' | 'downgrade') {
-    // TODO: Fix type
-    const { id, title, version, dependencies, alerts } = this.pkg
-      .manifest as Manifest
-    const value = {
-      id,
-      title,
-      version,
-      serviceRequirements: dependencies,
-      installAlert: alerts.install,
-    }
-
-    const { cancelled } = await wizardModal(
-      this.modalCtrl,
-      action === 'update'
-        ? this.wizardBaker.update(value)
-        : this.wizardBaker.downgrade(value),
-    )
-
-    if (cancelled) return
-
-    await pauseFor(250)
-    this.navCtrl.back()
+    })
   }
 }

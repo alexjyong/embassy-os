@@ -2,7 +2,7 @@ import { Component } from '@angular/core'
 import { AlertController, LoadingController } from '@ionic/angular'
 import { ErrorToastService } from '@start9labs/shared'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { PlatformType, RR } from 'src/app/services/api/api.types'
+import { PlatformType, Session } from 'src/app/services/api/api.types'
 
 @Component({
   selector: 'sessions',
@@ -11,7 +11,8 @@ import { PlatformType, RR } from 'src/app/services/api/api.types'
 })
 export class SessionsPage {
   loading = true
-  sessionInfo: RR.GetSessionsRes
+  currentSession?: Session
+  otherSessions: SessionWithId[] = []
 
   constructor(
     private readonly loadingCtrl: LoadingController,
@@ -22,27 +23,42 @@ export class SessionsPage {
 
   async ngOnInit() {
     try {
-      this.sessionInfo = await this.embassyApi.getSessions({})
-    } catch (e) {
+      const sessionInfo = await this.embassyApi.getSessions({})
+      this.currentSession = sessionInfo.sessions[sessionInfo.current]
+      delete sessionInfo.sessions[sessionInfo.current]
+      this.otherSessions = Object.entries(sessionInfo.sessions)
+        .map(([id, session]) => {
+          return {
+            id,
+            ...session,
+          }
+        })
+        .sort((a, b) => {
+          return (
+            new Date(b['last-active']).valueOf() -
+            new Date(a['last-active']).valueOf()
+          )
+        })
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       this.loading = false
     }
   }
 
-  async presentAlertKill(id: string) {
+  async presentAlertKillAll() {
     const alert = await this.alertCtrl.create({
-      header: 'Caution',
-      message: `Are you sure you want to kill this session?`,
+      header: 'Confirm',
+      message: `Terminate <b>all</b> other web sessions?<br /><br />Note: you will <b>not</b> be logged out of your current session on this device.`,
       buttons: [
         {
           text: 'Cancel',
           role: 'cancel',
         },
         {
-          text: 'Kill',
+          text: 'Terminate all',
           handler: () => {
-            this.kill(id)
+            this.kill(this.otherSessions.map(s => s.id))
           },
           cssClass: 'enter-click',
         },
@@ -51,18 +67,16 @@ export class SessionsPage {
     await alert.present()
   }
 
-  async kill(id: string): Promise<void> {
+  async kill(ids: string[]): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
-      message: 'Killing session...',
-      cssClass: 'loader',
+      message: `Terminating session${ids.length > 1 ? 's' : ''}...`,
     })
     await loader.present()
 
     try {
-      await this.embassyApi.killSessions({ ids: [id] })
-      delete this.sessionInfo.sessions[id]
-    } catch (e) {
+      await this.embassyApi.killSessions({ ids })
+      this.otherSessions = this.otherSessions.filter(s => !ids.includes(s.id))
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -100,4 +114,8 @@ export class SessionsPage {
   asIsOrder(a: any, b: any) {
     return 0
   }
+}
+
+interface SessionWithId extends Session {
+  id: string
 }

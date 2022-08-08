@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use color_eyre::eyre::eyre;
+use models::InvalidId;
 use patch_db::Revision;
 use rpc_toolkit::yajrc::RpcError;
 
@@ -30,7 +31,7 @@ pub enum ErrorKind {
     InvalidOnionAddress = 22,
     Pack = 23,
     ValidateS9pk = 24,
-    DiskCorrupted = 25,
+    DiskCorrupted = 25, // Remove
     Tor = 26,
     ConfigGen = 27,
     ParseNumber = 28,
@@ -64,6 +65,8 @@ pub enum ErrorKind {
     InvalidBackupTargetId = 56,
     ProductKeyMismatch = 57,
     LanPortConflict = 58,
+    Javascript = 59,
+    Pem = 60,
 }
 impl ErrorKind {
     pub fn as_str(&self) -> &'static str {
@@ -126,7 +129,9 @@ impl ErrorKind {
             Incoherent => "Incoherent",
             InvalidBackupTargetId => "Invalid Backup Target ID",
             ProductKeyMismatch => "Incompatible Product Keys",
-            LanPortConflict => "Incompatible LAN port configuration",
+            LanPortConflict => "Incompatible LAN Port Configuration",
+            Javascript => "Javascript Engine Error",
+            Pem => "PEM Encoding Error",
         }
     }
 }
@@ -142,6 +147,7 @@ pub struct Error {
     pub kind: ErrorKind,
     pub revision: Option<Revision>,
 }
+
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.kind.as_str(), self.source)
@@ -154,6 +160,11 @@ impl Error {
             kind,
             revision: None,
         }
+    }
+}
+impl From<InvalidId> for Error {
+    fn from(err: InvalidId) -> Self {
+        Error::new(err, crate::error::ErrorKind::InvalidPackageId)
     }
 }
 impl From<std::io::Error> for Error {

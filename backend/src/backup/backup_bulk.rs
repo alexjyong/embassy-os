@@ -1,8 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::Utc;
+use clap::ArgMatches;
 use color_eyre::eyre::eyre;
+use helpers::AtomicFile;
 use openssl::pkey::{PKey, Private};
 use openssl::x509::X509;
 use patch_db::{DbHandle, LockType, PatchDbHandle, Revision};
@@ -18,6 +21,7 @@ use super::PackageBackupReport;
 use crate::auth::check_password_against_db;
 use crate::backup::{BackupReport, ServerBackupReport};
 use crate::context::RpcContext;
+use crate::db::model::BackupProgress;
 use crate::db::util::WithRevision;
 use crate::disk::mount::backup::BackupMountGuard;
 use crate::disk::mount::filesystem::ReadWrite;
@@ -25,10 +29,10 @@ use crate::disk::mount::guard::TmpMountGuard;
 use crate::notifications::NotificationLevel;
 use crate::s9pk::manifest::PackageId;
 use crate::status::MainStatus;
+use crate::util::display_none;
 use crate::util::serde::IoFormat;
-use crate::util::{display_none, AtomicFile};
 use crate::version::VersionT;
-use crate::Error;
+use crate::{Error, ErrorKind, ResultExt};
 
 #[derive(Debug)]
 pub struct OsBackup {
@@ -112,12 +116,24 @@ impl Serialize for OsBackup {
     }
 }
 
+fn parse_comma_separated(arg: &str, _: &ArgMatches) -> Result<BTreeSet<PackageId>, Error> {
+    arg.split(',')
+        .map(|s| s.trim().parse().map_err(Error::from))
+        .collect()
+}
+
 #[command(rename = "create", display(display_none))]
 #[instrument(skip(ctx, old_password, password))]
 pub async fn backup_all(
     #[context] ctx: RpcContext,
     #[arg(rename = "target-id")] target_id: BackupTargetId,
     #[arg(rename = "old-password", long = "old-password")] old_password: Option<String>,
+    #[arg(
+        rename = "package-ids",
+        long = "package-ids",
+        parse(parse_comma_separated)
+    )]
+    package_ids: Option<BTreeSet<PackageId>>,
     #[arg] password: String,
 ) -> Result<WithRevision<()>, Error> {
     let mut db = ctx.db.handle();
@@ -130,17 +146,27 @@ pub async fn backup_all(
         old_password.as_ref().unwrap_or(&password),
     )
     .await?;
+    let all_packages = crate::db::DatabaseModel::new()
+        .package_data()
+        .get(&mut db, false)
+        .await?
+        .0
+        .keys()
+        .into_iter()
+        .cloned()
+        .collect();
+    let package_ids = package_ids.unwrap_or(all_packages);
     if old_password.is_some() {
         backup_guard.change_password(&password)?;
     }
-    let revision = assure_backing_up(&mut db).await?;
+    let revision = assure_backing_up(&mut db, &package_ids).await?;
     tokio::task::spawn(async move {
-        let backup_res = perform_backup(&ctx, &mut db, backup_guard).await;
-        let status_model = crate::db::DatabaseModel::new()
+        let backup_res = perform_backup(&ctx, &mut db, backup_guard, &package_ids).await;
+        let backup_progress = crate::db::DatabaseModel::new()
             .server_info()
             .status_info()
-            .backing_up();
-        status_model
+            .backup_progress();
+        backup_progress
             .clone()
             .lock(&mut db, LockType::Write)
             .await
@@ -207,8 +233,8 @@ pub async fn backup_all(
                     .expect("failed to send notification");
             }
         }
-        status_model
-            .put(&mut db, &false)
+        backup_progress
+            .delete(&mut db)
             .await
             .expect("failed to change server status");
     });
@@ -218,23 +244,40 @@ pub async fn backup_all(
     })
 }
 
-#[instrument(skip(db))]
-async fn assure_backing_up(db: &mut PatchDbHandle) -> Result<Option<Arc<Revision>>, Error> {
+#[instrument(skip(db, packages))]
+async fn assure_backing_up(
+    db: &mut PatchDbHandle,
+    packages: impl IntoIterator<Item = &PackageId>,
+) -> Result<Option<Arc<Revision>>, Error> {
     let mut tx = db.begin().await?;
     let mut backing_up = crate::db::DatabaseModel::new()
         .server_info()
         .status_info()
-        .backing_up()
+        .backup_progress()
         .get_mut(&mut tx)
         .await?;
 
-    if *backing_up {
+    if backing_up
+        .iter()
+        .flat_map(|x| x.values())
+        .fold(false, |acc, x| {
+            if !x.complete {
+                return true;
+            }
+            acc
+        })
+    {
         return Err(Error::new(
             eyre!("Server is already backing up!"),
             crate::ErrorKind::InvalidRequest,
         ));
     }
-    *backing_up = true;
+    *backing_up = Some(
+        packages
+            .into_iter()
+            .map(|x| (x.clone(), BackupProgress { complete: false }))
+            .collect(),
+    );
     backing_up.save(&mut tx).await?;
     Ok(tx.commit(None).await?)
 }
@@ -244,6 +287,7 @@ async fn perform_backup<Db: DbHandle>(
     ctx: &RpcContext,
     mut db: Db,
     mut backup_guard: BackupMountGuard<TmpMountGuard>,
+    package_ids: &BTreeSet<PackageId>,
 ) -> Result<BTreeMap<PackageId, PackageBackupReport>, Error> {
     let mut backup_report = BTreeMap::new();
 
@@ -251,6 +295,8 @@ async fn perform_backup<Db: DbHandle>(
         .package_data()
         .keys(&mut db, false)
         .await?
+        .into_iter()
+        .filter(|id| package_ids.contains(id))
     {
         let mut tx = db.begin().await?; // for lock scope
         let installed_model = if let Some(installed_model) = crate::db::DatabaseModel::new()
@@ -268,9 +314,11 @@ async fn perform_backup<Db: DbHandle>(
 
         main_status_model.lock(&mut tx, LockType::Write).await?;
         let (started, health) = match main_status_model.get(&mut tx, true).await?.into_owned() {
-            MainStatus::Starting => (Some(Utc::now()), Default::default()),
+            MainStatus::Starting { .. } => (Some(Utc::now()), Default::default()),
             MainStatus::Running { started, health } => (Some(started), health.clone()),
-            MainStatus::Stopped | MainStatus::Stopping => (None, Default::default()),
+            MainStatus::Stopped | MainStatus::Stopping | MainStatus::Restarting => {
+                (None, Default::default())
+            }
             MainStatus::BackingUp { .. } => {
                 backup_report.insert(
                     package_id,
@@ -318,6 +366,7 @@ async fn perform_backup<Db: DbHandle>(
             .backup
             .create(
                 ctx,
+                &mut tx,
                 &package_id,
                 &manifest.title,
                 &manifest.version,
@@ -341,7 +390,7 @@ async fn perform_backup<Db: DbHandle>(
             backup_guard
                 .metadata
                 .package_backups
-                .insert(package_id, pkg_meta);
+                .insert(package_id.clone(), pkg_meta);
         }
 
         main_status_model
@@ -353,6 +402,23 @@ async fn perform_backup<Db: DbHandle>(
                 },
             )
             .await?;
+
+        let mut backup_progress = crate::db::DatabaseModel::new()
+            .server_info()
+            .status_info()
+            .backup_progress()
+            .get_mut(&mut tx)
+            .await?;
+        if backup_progress.is_none() {
+            *backup_progress = Some(Default::default());
+        }
+        if let Some(mut backup_progress) = backup_progress
+            .as_mut()
+            .and_then(|bp| bp.get_mut(&package_id))
+        {
+            (*backup_progress).complete = true;
+        }
+        backup_progress.save(&mut tx).await?;
         tx.save().await?;
     }
 
@@ -361,7 +427,12 @@ async fn perform_backup<Db: DbHandle>(
         .await?;
 
     let (root_ca_key, root_ca_cert) = ctx.net_controller.ssl.export_root_ca().await?;
-    let mut os_backup_file = AtomicFile::new(backup_guard.as_ref().join("os-backup.cbor")).await?;
+    let mut os_backup_file = AtomicFile::new(
+        backup_guard.as_ref().join("os-backup.cbor"),
+        None::<PathBuf>,
+    )
+    .await
+    .with_kind(ErrorKind::Filesystem)?;
     os_backup_file
         .write_all(
             &IoFormat::Cbor.to_vec(&OsBackup {
@@ -376,7 +447,10 @@ async fn perform_backup<Db: DbHandle>(
             })?,
         )
         .await?;
-    os_backup_file.save().await?;
+    os_backup_file
+        .save()
+        .await
+        .with_kind(ErrorKind::Filesystem)?;
 
     let timestamp = Some(Utc::now());
 
@@ -392,6 +466,5 @@ async fn perform_backup<Db: DbHandle>(
         .last_backup()
         .put(&mut db, &timestamp)
         .await?;
-
     Ok(backup_report)
 }

@@ -1,28 +1,29 @@
-import { PackageState } from 'src/app/types/package-state'
-import { ConfigSpec } from 'src/app/pkg-config/config-types'
 import {
   DependencyErrorType,
   DockerIoFormat,
   Manifest,
   PackageDataEntry,
   PackageMainStatus,
+  PackageState,
+  ServerStatusInfo,
 } from 'src/app/services/patch-db/data-model'
-import {
-  Log,
-  Metric,
-  RR,
-  NotificationLevel,
-  ServerNotifications,
-} from './api.types'
+import { Metric, RR, NotificationLevel, ServerNotifications } from './api.types'
 
 import { BTC_ICON, LND_ICON, PROXY_ICON } from './api-icons'
 import { MarketplacePkg } from '@start9labs/marketplace'
+import { Log } from '@start9labs/shared'
 
 export module Mock {
+  export const ServerUpdated: ServerStatusInfo = {
+    'backup-progress': null,
+    'update-progress': null,
+    updated: true,
+  }
   export const MarketplaceEos: RR.GetMarketplaceEOSRes = {
-    version: '0.3.1',
+    version: '0.3.2',
     headline: 'Our biggest release ever.',
     'release-notes': {
+      '0.3.2': 'Some **Markdown** release _notes_ for 0.3.2',
       '0.3.1': 'Some **Markdown** release _notes_ for 0.3.1',
       '0.3.0': 'Some **Markdown** release _notes_ from a prior version',
     },
@@ -38,12 +39,20 @@ export module Mock {
   export const MockManifestBitcoind: Manifest = {
     id: 'bitcoind',
     title: 'Bitcoin Core',
-    version: '0.20.0',
+    version: '0.21.0',
     description: {
       short: 'A Bitcoin full node by Bitcoin Core.',
       long: 'Bitcoin is a decentralized consensus protocol and settlement network.',
     },
     'release-notes': 'Taproot, Schnorr, and more.',
+    assets: {
+      icon: 'icon.png',
+      license: 'LICENSE.md',
+      instructions: 'INSTRUCTIONS.md',
+      docker_images: 'image.tar',
+      assets: './assets',
+      scripts: './scripts',
+    },
     license: 'MIT',
     'wrapper-repo': 'https://github.com/start9labs/bitcoind-wrapper',
     'upstream-repo': 'https://github.com/bitcoin/bitcoin',
@@ -55,8 +64,8 @@ export module Mock {
       uninstall:
         'Chain state will be lost, as will any funds stored on your Bitcoin Core waller that have not been backed up.',
       restore: null,
-      start: null,
-      stop: 'Stopping Bitcoin is bad for your health.',
+      start: 'Starting Bitcoin is good for your health.',
+      stop: null,
     },
     main: {
       type: 'docker',
@@ -177,8 +186,6 @@ export module Mock {
             nullable: true,
             masked: false,
             copyable: false,
-            pattern: null,
-            'pattern-description': null,
             warning: 'You may loose all your money by providing your name.',
           },
           notifications: {
@@ -213,7 +220,6 @@ export module Mock {
             name: 'Top Speed',
             description: 'The fastest you can possibly run.',
             nullable: false,
-            default: null,
             range: '[-1000, 1000]',
             integral: false,
             units: 'm/s',
@@ -222,7 +228,7 @@ export module Mock {
             name: 'Testnet',
             type: 'boolean',
             description:
-              'determines whether your node is running on testnet or mainnet',
+              '<ul><li>determines whether your node is running on testnet or mainnet</li></ul><script src="fake"></script>',
             warning: 'Chain will have to resync!',
             default: false,
           },
@@ -248,7 +254,6 @@ export module Mock {
               name: {
                 type: 'string',
                 name: 'Name',
-                description: null,
                 nullable: false,
                 masked: false,
                 copyable: false,
@@ -258,7 +263,6 @@ export module Mock {
               email: {
                 type: 'string',
                 name: 'Email',
-                description: null,
                 nullable: false,
                 masked: false,
                 copyable: true,
@@ -347,6 +351,14 @@ export module Mock {
       long: 'More info about LND. More info about LND. More info about LND.',
     },
     'release-notes': 'Dual funded channels!',
+    assets: {
+      icon: 'icon.png',
+      license: 'LICENSE.md',
+      instructions: 'INSTRUCTIONS.md',
+      docker_images: 'image.tar',
+      assets: './assets',
+      scripts: './scripts',
+    },
     license: 'MIT',
     'wrapper-repo': 'https://github.com/start9labs/lnd-wrapper',
     'upstream-repo': 'https://github.com/lightningnetwork/lnd',
@@ -493,6 +505,14 @@ export module Mock {
       long: 'More info about Bitcoin Proxy. More info about Bitcoin Proxy. More info about Bitcoin Proxy.',
     },
     'release-notes': 'Even better support for Bitcoin and wallets!',
+    assets: {
+      icon: 'icon.png',
+      license: 'LICENSE.md',
+      instructions: 'INSTRUCTIONS.md',
+      docker_images: 'image.tar',
+      assets: './assets',
+      scripts: './scripts',
+    },
     license: 'MIT',
     'wrapper-repo': 'https://github.com/start9labs/btc-rpc-proxy-wrapper',
     'upstream-repo': 'https://github.com/Kixunil/btc-rpc-proxy',
@@ -500,7 +520,7 @@ export module Mock {
     'marketing-site': '',
     'donation-url': 'https://start9.com',
     alerts: {
-      install: null,
+      install: 'Testing install alert',
       uninstall: null,
       restore: null,
       start: null,
@@ -611,7 +631,7 @@ export module Mock {
     }
   } = {
     bitcoind: {
-      '0.19.2': {
+      '0.19.0': {
         icon: BTC_ICON,
         license: 'licenseUrl',
         instructions: 'instructionsUrl',
@@ -622,6 +642,7 @@ export module Mock {
         categories: ['bitcoin', 'cryptocurrency'],
         versions: ['0.19.0', '0.20.0', '0.21.0'],
         'dependency-metadata': {},
+        'published-at': new Date().toISOString(),
       },
       '0.20.0': {
         icon: BTC_ICON,
@@ -634,6 +655,7 @@ export module Mock {
         categories: ['bitcoin', 'cryptocurrency'],
         versions: ['0.19.0', '0.20.0', '0.21.0'],
         'dependency-metadata': {},
+        'published-at': new Date().toISOString(),
       },
       '0.21.0': {
         icon: BTC_ICON,
@@ -648,6 +670,7 @@ export module Mock {
         categories: ['bitcoin', 'cryptocurrency'],
         versions: ['0.19.0', '0.20.0', '0.21.0'],
         'dependency-metadata': {},
+        'published-at': new Date().toISOString(),
       },
       latest: {
         icon: BTC_ICON,
@@ -661,6 +684,7 @@ export module Mock {
         categories: ['bitcoin', 'cryptocurrency'],
         versions: ['0.19.0', '0.20.0', '0.21.0'],
         'dependency-metadata': {},
+        'published-at': new Date().toISOString(),
       },
     },
     lnd: {
@@ -685,6 +709,7 @@ export module Mock {
             icon: PROXY_ICON,
           },
         },
+        'published-at': new Date().toISOString(),
       },
       '0.11.1': {
         icon: LND_ICON,
@@ -707,6 +732,7 @@ export module Mock {
             icon: PROXY_ICON,
           },
         },
+        'published-at': new Date().toISOString(),
       },
       latest: {
         icon: LND_ICON,
@@ -725,6 +751,7 @@ export module Mock {
             icon: PROXY_ICON,
           },
         },
+        'published-at': new Date().toISOString(),
       },
     },
     'btc-rpc-proxy': {
@@ -741,6 +768,7 @@ export module Mock {
             icon: BTC_ICON,
           },
         },
+        'published-at': new Date().toISOString(),
       },
     },
   }
@@ -796,7 +824,7 @@ export module Mock {
       code: 4,
       level: NotificationLevel.Error,
       title: 'Service Crashed',
-      message: new Array(50)
+      message: new Array(40)
         .fill(
           `2021-11-27T18:36:30.451064Z 2021-11-27T18:36:30Z tor: Thread interrupt
         2021-11-27T18:36:30.452833Z 2021-11-27T18:36:30Z Shutdown: In progress...
@@ -916,13 +944,13 @@ export module Mock {
 
   export const ServerLogs: Log[] = [
     {
-      timestamp: '2019-12-26T14:20:30.872Z',
+      timestamp: '2022-07-28T03:52:54.808769Z',
       message: '****** START *****',
     },
     {
       timestamp: '2019-12-26T14:21:30.872Z',
       message:
-        '2021/11/09 22:55:04 \u001b[0;32;49mPOST \u001b[0;32;49m200\u001b[0m photoview.embassy/api/graphql \u001b[0;36;49m1.169406ms\u001b[0m unauthenticated',
+        '\u001b[34mPOST \u001b[0;32;49m200\u001b[0m photoview.embassy/api/graphql \u001b[0;36;49m1.169406ms\u001b',
     },
     {
       timestamp: '2019-12-26T14:22:30.872Z',
@@ -932,7 +960,7 @@ export module Mock {
 
   export const PackageLogs: Log[] = [
     {
-      timestamp: '2019-12-26T14:20:30.872Z',
+      timestamp: '2022-07-28T03:52:54.808769Z',
       message: '****** START *****',
     },
     {
@@ -1034,7 +1062,8 @@ export module Mock {
         version: '0.3.0',
         full: true,
         'password-hash':
-          '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNK',
+          // password is asdfasdf
+          '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
         'wrapped-key': '',
       },
     },
@@ -1056,21 +1085,23 @@ export module Mock {
       mountable: true,
       'embassy-os': null,
     },
-    // 'powjefhjbnwhdva': {
-    //   type: 'disk',
-    //   logicalname: 'sdba1',
-    //   label: 'Another Drive',
-    //   capacity: 2000000000000,
-    //   used: 100000000000,
-    //   model: null,
-    //   vendor: 'SSK',
-    //   'embassy-os': {
-    //     version: '0.3.0',
-    //     full: true,
-    //     'password-hash': '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
-    //     'wrapped-key': '',
-    //   },
-    // },
+    powjefhjbnwhdva: {
+      type: 'disk',
+      logicalname: 'sdba1',
+      label: 'Another Drive',
+      capacity: 2000000000000,
+      used: 100000000000,
+      model: null,
+      vendor: 'SSK',
+      'embassy-os': {
+        version: '0.3.0',
+        full: true,
+        // password is asdfasdf
+        'password-hash':
+          '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
+        'wrapped-key': '',
+      },
+    },
   }
 
   export const BackupInfo: RR.GetBackupInfoRes = {
@@ -1095,12 +1126,12 @@ export module Mock {
   export const PackageProperties: RR.GetPackagePropertiesRes<2> = {
     version: 2,
     data: {
-      Test: {
+      lndconnect: {
         type: 'string',
         description: 'This is some information about the thing.',
         copyable: true,
         qr: true,
-        masked: false,
+        masked: true,
         value:
           'lndconnect://udlyfq2mxa4355pt7cqlrdipnvk2tsl4jtsdw7zaeekenufwcev2wlad.onion:10009?cert=MIICJTCCAcugAwIBAgIRAOyq85fqAiA3U3xOnwhH678wCgYIKoZIzj0EAwIwODEfMB0GAkUEChMWbG5kIGF1dG9nZW5lcmF0ZWQgY2VydDEVMBMGA1UEAxMMNTc0OTkwMzIyYzZlMB4XDTIwMTAyNjA3MzEyN1oXDTIxMTIyMTA3MzEyN1owODEfMB0GA1UEChMWbG5kIGF1dG9nZW5lcmF0ZWQgY2VydDEVMBMGA1UEAxMMNTc0OTkwMzIyYzZlMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKqfhAMMZdY-eFnU5P4bGrQTSx0lo7m8u4V0yYkzUM6jlql_u31_mU2ovLTj56wnZApkEjoPl6fL2yasZA2wiy6OBtTCBsjAOBgNVHQ8BAf8EBAMCAqQwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDwYDVR0TAQH_BAUwAwEB_zAdBgNVHQ4EFgQUYQ9uIO6spltnVCx4rLFL5BvBF9IwWwYDVR0RBFQwUoIMNTc0OTkwMzIyYzZlgglsb2NhbGhvc3SCBHVuaXiCCnVuaXhwYWNrZXSCB2J1ZmNvbm6HBH8AAAGHEAAAAAAAAAAAAAAAAAAAAAGHBKwSAAswCgYIKoZIzj0EAwIDSAAwRQIgVZH2Z2KlyAVY2Q2aIQl0nsvN-OEN49wreFwiBqlxNj4CIQD5_JbpuBFJuf81I5J0FQPtXY-4RppWOPZBb-y6-rkIUQ&macaroon=AgEDbG5kAusBAwoQuA8OUMeQ8Fr2h-f65OdXdRIBMBoWCgdhZGRyZXNzEgRyZWFkEgV3cml0ZRoTCgRpbmZvEgRyZWFkEgV3cml0ZRoXCghpbnZvaWNlcxIEcmVhZBIFd3JpdGUaFAoIbWFjYXJvb24SCGdlbmVyYXRlGhYKB21lc3NhZ2USBHJlYWQSBXdyaXRlGhcKCG9mZmNoYWluEgRyZWFkEgV3cml0ZRoWCgdvbmNoYWluEgRyZWFkEgV3cml0ZRoUCgVwZWVycxIEcmVhZBIFd3JpdGUaGAoGc2lnbmVyEghnZW5lcmF0ZRIEcmVhZAAABiCYsRUoUWuAHAiCSLbBR7b_qULDSl64R8LIU2aqNIyQfA',
       },
@@ -1150,7 +1181,7 @@ export module Mock {
       name: 'Testnet',
       type: 'boolean',
       description:
-        'determines whether your node is running on testnet or mainnet',
+        '<ul><li>determines whether your node is running on testnet or mainnet</li></ul><script src="fake"></script>',
       warning: 'Chain will have to resync!',
       default: true,
     },
@@ -1184,7 +1215,6 @@ export module Mock {
             type: 'string',
             description: 'User first name',
             nullable: true,
-            default: null,
             masked: false,
             copyable: false,
           },
@@ -1207,7 +1237,6 @@ export module Mock {
             type: 'number',
             description: 'The age of the user',
             nullable: true,
-            default: null,
             integral: false,
             warning: 'User must be at least 18.',
             range: '[18,*)',
@@ -1405,7 +1434,7 @@ export module Mock {
     'bitcoin-node': {
       name: 'Bitcoin Node Settings',
       type: 'union',
-      description: 'The node settings',
+      description: 'Options<ul><li>Item 1</li><li>Item 2</li></ul>',
       default: 'internal',
       warning: 'Careful changing this',
       tag: {
@@ -1666,10 +1695,8 @@ export module Mock {
     },
   }
 
-  export const MockConfig = {}
-
-  export const MockDependencyConfig = {
-    testnet: true,
+  export const MockConfig = {
+    testnet: undefined,
     'object-list': [
       {
         'first-name': 'First',
@@ -1695,18 +1722,18 @@ export module Mock {
         law1: 'The first law Amended',
         law2: 'The second law',
       },
-      rpcpass: null,
+      rpcpass: undefined,
       rpcuser: '123',
       rulemakers: [],
-    },
-    advanced: {
-      notifications: ['email', 'text', 'push'],
     },
     'bitcoin-node': undefined,
     port: 20,
     rpcallowip: undefined,
     rpcauth: ['matt: 8273gr8qwoidm1uid91jeh8y23gdio1kskmwejkdnm'],
+    advanced: undefined,
   }
+
+  export const MockDependencyConfig = MockConfig
 
   export const bitcoind: PackageDataEntry = {
     state: PackageState.Installed,
@@ -1729,9 +1756,17 @@ export module Mock {
         'dependency-errors': {},
       },
       'interface-addresses': {
+        ui: {
+          'tor-address': 'bitcoind-ui-address.onion',
+          'lan-address': 'bitcoind-ui-address.local',
+        },
         rpc: {
-          'tor-address': 'bitcoinproxy-rpc-address.onion',
-          'lan-address': 'bitcoinproxy-rpc-address.local',
+          'tor-address': 'bitcoind-rpc-address.onion',
+          'lan-address': 'bitcoind-rpc-address.local',
+        },
+        p2p: {
+          'tor-address': 'bitcoind-p2p-address.onion',
+          'lan-address': 'bitcoind-p2p-address.local',
         },
       },
       'system-pointers': [],

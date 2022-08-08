@@ -6,7 +6,7 @@ import { ServerShowPage } from './server-show.page'
 import { FormsModule } from '@angular/forms'
 import { TextSpinnerComponentModule } from '@start9labs/shared'
 import { BadgeMenuComponentModule } from 'src/app/components/badge-menu-button/badge-menu.component.module'
-import { SnakePageModule } from 'src/app/modals/snake/snake.module'
+import { OSUpdatePageModule } from 'src/app/modals/os-update/os-update.page.module'
 
 const routes: Routes = [
   {
@@ -23,7 +23,7 @@ const routes: Routes = [
     RouterModule.forChild(routes),
     TextSpinnerComponentModule,
     BadgeMenuComponentModule,
-    SnakePageModule,
+    OSUpdatePageModule,
   ],
   declarations: [ServerShowPage],
 })

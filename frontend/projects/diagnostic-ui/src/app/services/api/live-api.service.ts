@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core'
-import { HttpService } from '../http.service'
-import { ApiService, GetErrorRes, GetLogsReq, GetLogsRes } from './api.service'
+import { HttpService } from '@start9labs/shared'
+import { ApiService, GetErrorRes } from './api.service'
+import { LogsRes, ServerLogsReq } from '@start9labs/shared'
 
 @Injectable()
 export class LiveApiService extends ApiService {
@@ -24,13 +25,20 @@ export class LiveApiService extends ApiService {
 
   forgetDrive(): Promise<void> {
     return this.http.rpcRequest<void>({
-      method: 'diagnostic.forget-disk',
+      method: 'diagnostic.disk.forget',
       params: {},
     })
   }
 
-  getLogs(params: GetLogsReq): Promise<GetLogsRes> {
-    return this.http.rpcRequest<GetLogsRes>({
+  repairDisk(): Promise<void> {
+    return this.http.rpcRequest<void>({
+      method: 'diagnostic.disk.repair',
+      params: {},
+    })
+  }
+
+  getLogs(params: ServerLogsReq): Promise<LogsRes> {
+    return this.http.rpcRequest<LogsRes>({
       method: 'diagnostic.logs',
       params,
     })

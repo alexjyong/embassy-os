@@ -5,7 +5,7 @@ import {
   ModalController,
 } from '@ionic/angular'
 import { ActionSheetButton } from '@ionic/core'
-import { ErrorToastService } from '@start9labs/shared'
+import { DestroyService, ErrorToastService } from '@start9labs/shared'
 import { AbstractMarketplaceService } from '@start9labs/marketplace'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
 import { ValueSpecObject } from 'src/app/pkg-config/config-types'
@@ -15,16 +15,30 @@ import { v4 } from 'uuid'
 import { UIMarketplaceData } from '../../../services/patch-db/data-model'
 import { ConfigService } from '../../../services/config.service'
 import { MarketplaceService } from 'src/app/services/marketplace.service'
-import { finalize, first } from 'rxjs/operators'
+import {
+  distinctUntilChanged,
+  finalize,
+  first,
+  takeUntil,
+} from 'rxjs/operators'
+import { getServerInfo } from '../../../util/get-server-info'
+import { getMarketplace } from '../../../util/get-marketplace'
+
+type Marketplaces = {
+  id: string | null
+  name: string
+  url: string
+}[]
 
 @Component({
   selector: 'marketplaces',
   templateUrl: 'marketplaces.page.html',
   styleUrls: ['marketplaces.page.scss'],
+  providers: [DestroyService],
 })
 export class MarketplacesPage {
-  selectedId: string | undefined
-  marketplaces: { id: string | undefined; name: string; url: string }[] = []
+  selectedId: string | null = null
+  marketplaces: Marketplaces = []
 
   constructor(
     private readonly api: ApiService,
@@ -35,31 +49,35 @@ export class MarketplacesPage {
     @Inject(AbstractMarketplaceService)
     private readonly marketplaceService: MarketplaceService,
     private readonly config: ConfigService,
-    public readonly patch: PatchDbService,
+    private readonly patch: PatchDbService,
+    private readonly destroy$: DestroyService,
   ) {}
 
   ngOnInit() {
-    this.patch.watch$('ui', 'marketplace').subscribe(mp => {
-      const marketplaces = [
-        {
-          id: undefined,
-          name: this.config.marketplace.name,
-          url: this.config.marketplace.url,
-        },
-      ]
-      if (mp) {
-        this.selectedId = mp['selected-id']
-        const alts = Object.entries(mp['known-hosts']).map(([k, v]) => {
-          return {
-            id: k,
-            name: v.name,
-            url: v.url,
-          }
-        })
-        marketplaces.push.apply(marketplaces, alts)
-      }
-      this.marketplaces = marketplaces
-    })
+    this.patch
+      .watch$('ui', 'marketplace')
+      .pipe(distinctUntilChanged(), takeUntil(this.destroy$))
+      .subscribe((mp: UIMarketplaceData | undefined) => {
+        let marketplaces: Marketplaces = [
+          {
+            id: null,
+            name: this.config.marketplace.name,
+            url: this.config.marketplace.url,
+          },
+        ]
+        if (mp) {
+          this.selectedId = mp['selected-id']
+          const alts = Object.entries(mp['known-hosts']).map(([k, v]) => {
+            return {
+              id: k,
+              name: v.name,
+              url: v.url,
+            }
+          })
+          marketplaces = marketplaces.concat(alts)
+        }
+        this.marketplaces = marketplaces
+      })
   }
 
   async presentModalAdd() {
@@ -91,34 +109,33 @@ export class MarketplacesPage {
     await modal.present()
   }
 
-  async presentAction(id: string) {
+  async presentAction(id: string | null) {
     // no need to view actions if is selected marketplace
-    if (id === this.patch.getData().ui.marketplace?.['selected-id']) return
+    const marketplace = await getMarketplace(this.patch)
+
+    if (id === marketplace['selected-id']) return
 
     const buttons: ActionSheetButton[] = [
       {
-        text: 'Forget',
-        icon: 'trash',
-        role: 'destructive',
-        handler: () => {
-          this.delete(id)
-        },
-      },
-      {
-        text: 'Connect to marketplace',
+        text: 'Connect',
         handler: () => {
           this.connect(id)
         },
       },
     ]
 
-    if (!id) {
-      buttons.shift()
+    if (id) {
+      buttons.unshift({
+        text: 'Delete',
+        role: 'destructive',
+        handler: () => {
+          this.delete(id)
+        },
+      })
     }
 
     const action = await this.actionCtrl.create({
-      header: id,
-      subHeader: 'Manage marketplaces',
+      header: this.marketplaces.find(mp => mp.id === id)?.name,
       mode: 'ios',
       buttons,
     })
@@ -126,28 +143,22 @@ export class MarketplacesPage {
     await action.present()
   }
 
-  private async connect(id: string): Promise<void> {
-    const marketplace: UIMarketplaceData = JSON.parse(
-      JSON.stringify(this.patch.getData().ui.marketplace),
-    )
+  private async connect(id: string | null): Promise<void> {
+    const marketplace = await getMarketplace(this.patch)
 
     const url = id
       ? marketplace['known-hosts'][id].url
       : this.config.marketplace.url
 
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Validating Marketplace...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
-      await this.marketplaceService.getMarketplaceData(
-        { 'server-id': this.patch.getData()['server-info'].id },
-        url,
-      )
-    } catch (e) {
+      const { id } = await getServerInfo(this.patch)
+      await this.marketplaceService.getMarketplaceData({ 'server-id': id }, url)
+    } catch (e: any) {
       this.errToast.present(e)
       loader.dismiss()
       return
@@ -155,10 +166,14 @@ export class MarketplacesPage {
 
     loader.message = 'Changing Marketplace...'
 
+    const value: UIMarketplaceData = {
+      ...marketplace,
+      'selected-id': id,
+    }
+
     try {
-      marketplace['selected-id'] = id
-      await this.api.setDbValue({ pointer: `/marketplace`, value: marketplace })
-    } catch (e) {
+      await this.api.setDbValue({ pointer: `/marketplace`, value })
+    } catch (e: any) {
       this.errToast.present(e)
       loader.dismiss()
     }
@@ -175,22 +190,18 @@ export class MarketplacesPage {
   }
 
   private async delete(id: string): Promise<void> {
-    if (!id) return
-    const marketplace: UIMarketplaceData = JSON.parse(
-      JSON.stringify(this.patch.getData().ui.marketplace),
-    )
+    const data = await getMarketplace(this.patch)
+    const marketplace: UIMarketplaceData = JSON.parse(JSON.stringify(data))
 
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Deleting...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       delete marketplace['known-hosts'][id]
       await this.api.setDbValue({ pointer: `/marketplace`, value: marketplace })
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -198,32 +209,33 @@ export class MarketplacesPage {
   }
 
   private async save(url: string): Promise<void> {
-    const marketplace = this.patch.getData().ui.marketplace
-      ? (JSON.parse(
-          JSON.stringify(this.patch.getData().ui.marketplace),
-        ) as UIMarketplaceData)
-      : { 'selected-id': undefined, 'known-hosts': {} }
+    const data = await getMarketplace(this.patch)
+    const marketplace: UIMarketplaceData = data
+      ? JSON.parse(JSON.stringify(data))
+      : {
+          'selected-id': null,
+          'known-hosts': {},
+        }
 
     // no-op on duplicates
     const currentUrls = this.marketplaces.map(mp => mp.url)
     if (currentUrls.includes(new URL(url).hostname)) return
 
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Validating Marketplace...',
-      cssClass: 'loader',
     })
 
     await loader.present()
 
     try {
       const id = v4()
+      const { id: serverId } = await getServerInfo(this.patch)
       const { name } = await this.marketplaceService.getMarketplaceData(
-        { 'server-id': this.patch.getData()['server-info'].id },
+        { 'server-id': serverId },
         url,
       )
       marketplace['known-hosts'][id] = { name, url }
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
       loader.dismiss()
       return
@@ -233,7 +245,7 @@ export class MarketplacesPage {
 
     try {
       await this.api.setDbValue({ pointer: `/marketplace`, value: marketplace })
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -241,32 +253,33 @@ export class MarketplacesPage {
   }
 
   private async saveAndConnect(url: string): Promise<void> {
-    const marketplace = this.patch.getData().ui.marketplace
-      ? (JSON.parse(
-          JSON.stringify(this.patch.getData().ui.marketplace),
-        ) as UIMarketplaceData)
-      : { 'selected-id': undefined, 'known-hosts': {} }
+    const data = await getMarketplace(this.patch)
+    const marketplace: UIMarketplaceData = data
+      ? JSON.parse(JSON.stringify(data))
+      : {
+          'selected-id': null,
+          'known-hosts': {},
+        }
 
     // no-op on duplicates
     const currentUrls = this.marketplaces.map(mp => mp.url)
     if (currentUrls.includes(new URL(url).hostname)) return
 
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Validating Marketplace...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       const id = v4()
+      const { id: serverId } = await getServerInfo(this.patch)
       const { name } = await this.marketplaceService.getMarketplaceData(
-        { 'server-id': this.patch.getData()['server-info'].id },
+        { 'server-id': serverId },
         url,
       )
       marketplace['known-hosts'][id] = { name, url }
       marketplace['selected-id'] = id
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
       loader.dismiss()
       return
@@ -276,7 +289,7 @@ export class MarketplacesPage {
 
     try {
       await this.api.setDbValue({ pointer: `/marketplace`, value: marketplace })
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
       loader.dismiss()
       return

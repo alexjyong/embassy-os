@@ -1,8 +1,5 @@
 import { ChangeDetectionStrategy, Component, Input } from '@angular/core'
-import {
-  PackageMainStatus,
-  Manifest,
-} from 'src/app/services/patch-db/data-model'
+import { PackageMainStatus } from 'src/app/services/patch-db/data-model'
 import { PkgInfo } from 'src/app/util/get-package-info'
 import { UiLauncherService } from 'src/app/services/ui-launcher.service'
 
@@ -13,19 +10,14 @@ import { UiLauncherService } from 'src/app/services/ui-launcher.service'
 })
 export class AppListPkgComponent {
   @Input()
-  pkg: PkgInfo
-
-  @Input()
-  connectionFailure = false
+  pkg!: PkgInfo
 
   constructor(private readonly launcherService: UiLauncherService) {}
 
   get status(): PackageMainStatus {
-    return this.pkg.entry.installed?.status.main.status
-  }
-
-  get manifest(): Manifest {
-    return this.pkg.entry.manifest
+    return (
+      this.pkg.entry.installed?.status.main.status || PackageMainStatus.Stopped
+    )
   }
 
   launchUi(e: Event): void {

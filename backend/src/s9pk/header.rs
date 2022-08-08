@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
-use std::io::Write;
 
 use color_eyre::eyre::eyre;
 use ed25519_dalek::{PublicKey, Signature};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use crate::Error;
 
@@ -20,17 +19,17 @@ impl Header {
     pub fn placeholder() -> Self {
         Header {
             pubkey: PublicKey::default(),
-            signature: Signature::new([0; 64]),
+            signature: Signature::from_bytes(&[0; 64]).expect("Invalid ed25519 signature"),
             table_of_contents: Default::default(),
         }
     }
     // MUST BE SAME SIZE REGARDLESS OF DATA
-    pub fn serialize<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
-        writer.write_all(&MAGIC)?;
-        writer.write_all(&[VERSION])?;
-        writer.write_all(self.pubkey.as_bytes())?;
-        writer.write_all(self.signature.as_ref())?;
-        self.table_of_contents.serialize(writer)?;
+    pub async fn serialize<W: AsyncWriteExt + Unpin>(&self, mut writer: W) -> std::io::Result<()> {
+        writer.write_all(&MAGIC).await?;
+        writer.write_all(&[VERSION]).await?;
+        writer.write_all(self.pubkey.as_bytes()).await?;
+        writer.write_all(self.signature.as_ref()).await?;
+        self.table_of_contents.serialize(writer).await?;
         Ok(())
     }
     pub async fn deserialize<R: AsyncRead + Unpin>(mut reader: R) -> Result<Self, Error> {
@@ -38,7 +37,7 @@ impl Header {
         reader.read_exact(&mut magic).await?;
         if magic != MAGIC {
             return Err(Error::new(
-                eyre!("Incorrect Magic"),
+                eyre!("Incorrect Magic: {:?}", magic),
                 crate::ErrorKind::ParseS9pk,
             ));
         }
@@ -46,7 +45,7 @@ impl Header {
         reader.read_exact(&mut version).await?;
         if version[0] != VERSION {
             return Err(Error::new(
-                eyre!("Unknown Version"),
+                eyre!("Unknown Version: {}", version[0]),
                 crate::ErrorKind::ParseS9pk,
             ));
         }
@@ -56,7 +55,7 @@ impl Header {
             .map_err(|e| Error::new(e, crate::ErrorKind::ParseS9pk))?;
         let mut sig_bytes = [0; 64];
         reader.read_exact(&mut sig_bytes).await?;
-        let signature = Signature::new(sig_bytes);
+        let signature = Signature::from_bytes(&sig_bytes).expect("Invalid ed25519 signature");
         let table_of_contents = TableOfContents::deserialize(reader).await?;
 
         Ok(Header {
@@ -75,24 +74,34 @@ pub struct TableOfContents {
     pub icon: FileSection,
     pub docker_images: FileSection,
     pub assets: FileSection,
+    pub scripts: Option<FileSection>,
 }
 impl TableOfContents {
-    pub fn serialize<W: Write>(&self, mut writer: W) -> std::io::Result<()> {
+    pub async fn serialize<W: AsyncWriteExt + Unpin>(&self, mut writer: W) -> std::io::Result<()> {
         let len: u32 = ((1 + "manifest".len() + 16)
             + (1 + "license".len() + 16)
             + (1 + "instructions".len() + 16)
             + (1 + "icon".len() + 16)
             + (1 + "docker_images".len() + 16)
-            + (1 + "assets".len() + 16)) as u32;
-        writer.write_all(&u32::to_be_bytes(len))?;
-        self.manifest.serialize_entry("manifest", &mut writer)?;
-        self.license.serialize_entry("license", &mut writer)?;
+            + (1 + "assets".len() + 16)
+            + (1 + "scripts".len() + 16)) as u32;
+        writer.write_all(&u32::to_be_bytes(len)).await?;
+        self.manifest
+            .serialize_entry("manifest", &mut writer)
+            .await?;
+        self.license.serialize_entry("license", &mut writer).await?;
         self.instructions
-            .serialize_entry("instructions", &mut writer)?;
-        self.icon.serialize_entry("icon", &mut writer)?;
+            .serialize_entry("instructions", &mut writer)
+            .await?;
+        self.icon.serialize_entry("icon", &mut writer).await?;
         self.docker_images
-            .serialize_entry("docker_images", &mut writer)?;
-        self.assets.serialize_entry("assets", &mut writer)?;
+            .serialize_entry("docker_images", &mut writer)
+            .await?;
+        self.assets.serialize_entry("assets", &mut writer).await?;
+        self.scripts
+            .unwrap_or_default()
+            .serialize_entry("scripts", &mut writer)
+            .await?;
         Ok(())
     }
     pub async fn deserialize<R: AsyncRead + Unpin>(mut reader: R) -> std::io::Result<Self> {
@@ -131,6 +140,7 @@ impl TableOfContents {
             icon: from_table(&table, "icon")?,
             docker_images: from_table(&table, "docker_images")?,
             assets: from_table(&table, "assets")?,
+            scripts: table.get("scripts".as_bytes()).cloned(),
         })
     }
 }
@@ -141,11 +151,15 @@ pub struct FileSection {
     pub length: u64,
 }
 impl FileSection {
-    pub fn serialize_entry<W: Write>(self, label: &str, mut writer: W) -> std::io::Result<()> {
-        writer.write_all(&[label.len() as u8])?;
-        writer.write_all(label.as_bytes())?;
-        writer.write_all(&u64::to_be_bytes(self.position))?;
-        writer.write_all(&u64::to_be_bytes(self.length))?;
+    pub async fn serialize_entry<W: AsyncWriteExt + Unpin>(
+        self,
+        label: &str,
+        mut writer: W,
+    ) -> std::io::Result<()> {
+        writer.write_all(&[label.len() as u8]).await?;
+        writer.write_all(label.as_bytes()).await?;
+        writer.write_all(&u64::to_be_bytes(self.position)).await?;
+        writer.write_all(&u64::to_be_bytes(self.length)).await?;
         Ok(())
     }
     pub async fn deserialize_entry<R: AsyncRead + Unpin>(

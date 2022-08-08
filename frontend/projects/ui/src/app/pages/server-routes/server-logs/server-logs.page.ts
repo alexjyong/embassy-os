@@ -1,4 +1,5 @@
 import { Component } from '@angular/core'
+import { RR } from 'src/app/services/api/api.types'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
 
 @Component({
@@ -7,22 +8,17 @@ import { ApiService } from 'src/app/services/api/embassy-api.service'
   styleUrls: ['./server-logs.page.scss'],
 })
 export class ServerLogsPage {
-  pkgId: string
-  loading = true
-  needInfinite = true
-  before: string
+  constructor(private readonly embassyApi: ApiService) {}
 
-  constructor (
-    private readonly embassyApi: ApiService,
-  ) { }
+  followLogs() {
+    return async (params: RR.FollowServerLogsReq) => {
+      return this.embassyApi.followServerLogs(params)
+    }
+  }
 
-  fetchFetchLogs () {
-    return async (params: { before_flag?: boolean, limit?: number, cursor?: string }) => {
-      return this.embassyApi.getServerLogs({
-        before_flag: params.before_flag,
-        cursor: params.cursor,
-        limit: params.limit,
-      })
+  fetchLogs() {
+    return async (params: RR.GetServerLogsReq) => {
+      return this.embassyApi.getServerLogs(params)
     }
   }
 }

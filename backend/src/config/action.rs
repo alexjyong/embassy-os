@@ -7,10 +7,10 @@ use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::{Config, ConfigSpec};
-use crate::action::ActionImplementation;
 use crate::context::RpcContext;
 use crate::dependencies::Dependencies;
 use crate::id::ImageId;
+use crate::procedure::{PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::status::health_check::HealthCheckId;
 use crate::util::Version;
@@ -26,17 +26,22 @@ pub struct ConfigRes {
 
 #[derive(Clone, Debug, Deserialize, Serialize, HasModel)]
 pub struct ConfigActions {
-    pub get: ActionImplementation,
-    pub set: ActionImplementation,
+    pub get: PackageProcedure,
+    pub set: PackageProcedure,
 }
 impl ConfigActions {
     #[instrument]
-    pub fn validate(&self, volumes: &Volumes, image_ids: &BTreeSet<ImageId>) -> Result<(), Error> {
+    pub fn validate(
+        &self,
+        eos_version: &Version,
+        volumes: &Volumes,
+        image_ids: &BTreeSet<ImageId>,
+    ) -> Result<(), Error> {
         self.get
-            .validate(volumes, image_ids, true)
+            .validate(eos_version, volumes, image_ids, true)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Config Get"))?;
         self.set
-            .validate(volumes, image_ids, true)
+            .validate(eos_version, volumes, image_ids, true)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Config Set"))?;
         Ok(())
     }
@@ -53,7 +58,7 @@ impl ConfigActions {
                 ctx,
                 pkg_id,
                 pkg_version,
-                Some("GetConfig"),
+                ProcedureName::GetConfig,
                 volumes,
                 None::<()>,
                 false,
@@ -81,7 +86,7 @@ impl ConfigActions {
                 ctx,
                 pkg_id,
                 pkg_version,
-                Some("SetConfig"),
+                ProcedureName::SetConfig,
                 volumes,
                 Some(input),
                 false,
@@ -107,6 +112,7 @@ impl ConfigActions {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct SetResult {
+    #[serde(default)]
     #[serde(deserialize_with = "crate::util::serde::deserialize_from_str_opt")]
     #[serde(serialize_with = "crate::util::serde::serialize_display_opt")]
     pub signal: Option<Signal>,

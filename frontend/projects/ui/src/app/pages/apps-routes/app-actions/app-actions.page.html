@@ -8,8 +8,7 @@
 </ion-header>
 
 <ion-content class="ion-padding-top">
-  <ion-item-group *ngIf="pkg">
-
+  <ion-item-group *ngIf="pkg$ | async as pkg">
     <!-- ** standard actions ** -->
     <ion-item-divider>Standard Actions</ion-item-divider>
     <app-actions-item
@@ -18,11 +17,14 @@
         description: 'This will uninstall the service from your Embassy and delete all data permanently.',
         icon: 'trash-outline'
       }"
-      (click)="uninstall()">
+      (click)="tryUninstall(pkg)"
+    >
     </app-actions-item>
 
     <!-- ** specific actions ** -->
-    <ion-item-divider *ngIf="!(pkg.manifest.actions | empty)">Actions for {{ pkg.manifest.title }}</ion-item-divider>
+    <ion-item-divider *ngIf="!(pkg.manifest.actions | empty)"
+      >Actions for {{ pkg.manifest.title }}</ion-item-divider
+    >
     <app-actions-item
       *ngFor="let action of pkg.manifest.actions | keyvalue: asIsOrder"
       [action]="{
@@ -30,7 +32,8 @@
         description: action.value.description,
         icon: 'play-circle-outline'
       }"
-      (click)="handleAction(action)">
+      (click)="handleAction(pkg, action)"
+    >
     </app-actions-item>
   </ion-item-group>
 </ion-content>

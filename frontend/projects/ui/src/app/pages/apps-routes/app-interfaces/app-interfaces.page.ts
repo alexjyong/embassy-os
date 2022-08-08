@@ -1,13 +1,15 @@
-import { Component, Input, ViewChild } from '@angular/core'
+import { Component, Input } from '@angular/core'
 import { ActivatedRoute } from '@angular/router'
-import { IonContent, ToastController } from '@ionic/angular'
+import { ModalController, ToastController } from '@ionic/angular'
+import { getPkgId, copyToClipboard } from '@start9labs/shared'
 import { getUiInterfaceKey } from 'src/app/services/config.service'
 import {
   InstalledPackageDataEntry,
   InterfaceDef,
 } from 'src/app/services/patch-db/data-model'
 import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
-import { copyToClipboard } from 'src/app/util/web.util'
+import { QRComponent } from 'src/app/components/qr/qr.component'
+import { getPackage } from '../../../util/get-package-data'
 
 interface LocalInterface {
   def: InterfaceDef
@@ -20,21 +22,21 @@ interface LocalInterface {
   styleUrls: ['./app-interfaces.page.scss'],
 })
 export class AppInterfacesPage {
-  @ViewChild(IonContent) content: IonContent
-  ui: LocalInterface | null
+  ui?: LocalInterface
   other: LocalInterface[] = []
-  pkgId: string
+  readonly pkgId = getPkgId(this.route)
 
   constructor(
     private readonly route: ActivatedRoute,
-    public readonly patch: PatchDbService,
+    private readonly patch: PatchDbService,
   ) {}
 
-  ngOnInit() {
-    this.pkgId = this.route.snapshot.paramMap.get('pkgId')
-    const pkg = this.patch.getData()['package-data'][this.pkgId]
+  async ngOnInit() {
+    const pkg = await getPackage(this.patch, this.pkgId)
     const interfaces = pkg.manifest.interfaces
     const uiKey = getUiInterfaceKey(interfaces)
+
+    if (!pkg.installed) return
 
     const addressesMap = pkg.installed['interface-addresses']
 
@@ -45,10 +47,10 @@ export class AppInterfacesPage {
         addresses: {
           'lan-address': uiAddresses['lan-address']
             ? 'https://' + uiAddresses['lan-address']
-            : null,
+            : '',
           'tor-address': uiAddresses['tor-address']
             ? 'http://' + uiAddresses['tor-address']
-            : null,
+            : '',
         },
       }
     }
@@ -62,21 +64,13 @@ export class AppInterfacesPage {
           addresses: {
             'lan-address': addresses['lan-address']
               ? 'https://' + addresses['lan-address']
-              : null,
+              : '',
             'tor-address': addresses['tor-address']
               ? 'http://' + addresses['tor-address']
-              : null,
+              : '',
           },
         }
       })
-  }
-
-  ngAfterViewInit() {
-    this.content.scrollToPoint(undefined, 1)
-  }
-
-  asIsOrder() {
-    return 0
   }
 }
 
@@ -86,18 +80,35 @@ export class AppInterfacesPage {
   styleUrls: ['./app-interfaces.page.scss'],
 })
 export class AppInterfacesItemComponent {
-  @Input() interface: LocalInterface
+  @Input()
+  interface!: LocalInterface
 
-  constructor(private readonly toastCtrl: ToastController) {}
+  constructor(
+    private readonly toastCtrl: ToastController,
+    private readonly modalCtrl: ModalController,
+  ) {}
 
   launch(url: string): void {
     window.open(url, '_blank', 'noreferrer')
   }
 
+  async showQR(text: string): Promise<void> {
+    const modal = await this.modalCtrl.create({
+      component: QRComponent,
+      componentProps: {
+        text,
+      },
+      cssClass: 'qr-modal',
+    })
+    await modal.present()
+  }
+
   async copy(address: string): Promise<void> {
     let message = ''
     await copyToClipboard(address || '').then(success => {
-      message = success ? 'copied to clipboard!' : 'failed to copy'
+      message = success
+        ? 'Copied to clipboard!'
+        : 'Failed to copy to clipboard.'
     })
 
     const toast = await this.toastCtrl.create({

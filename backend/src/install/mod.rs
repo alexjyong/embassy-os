@@ -1,23 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::SeekFrom;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use color_eyre::eyre::eyre;
 use emver::VersionRange;
-use futures::future::{self, BoxFuture};
-use futures::{stream, FutureExt, StreamExt, TryStreamExt};
+use futures::future::BoxFuture;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use http::header::CONTENT_LENGTH;
 use http::{Request, Response, StatusCode};
 use hyper::Body;
-use patch_db::{DbHandle, LockType};
+use patch_db::{DbHandle, LockReceipt, LockType};
 use reqwest::Url;
+use rpc_toolkit::command;
 use rpc_toolkit::yajrc::RpcError;
-use rpc_toolkit::{command, Context};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncRead, AsyncSeek, AsyncSeekExt};
 use tokio::process::Command;
@@ -25,16 +25,18 @@ use tokio_stream::wrappers::ReadDirStream;
 use tracing::instrument;
 
 use self::cleanup::{cleanup_failed, remove_from_current_dependents_lists};
+use crate::config::ConfigReceipts;
 use crate::context::{CliContext, RpcContext};
 use crate::core::rpc_continuations::{RequestGuid, RpcContinuation};
 use crate::db::model::{
-    CurrentDependencyInfo, InstalledPackageDataEntry, PackageDataEntry, RecoveredPackageInfo,
-    StaticDependencyInfo, StaticFiles,
+    CurrentDependencies, CurrentDependencyInfo, CurrentDependents, InstalledPackageDataEntry,
+    PackageDataEntry, RecoveredPackageInfo, StaticDependencyInfo, StaticFiles,
 };
 use crate::db::util::WithRevision;
 use crate::dependencies::{
     add_dependent_to_current_dependents_lists, break_all_dependents_transitive,
-    reconfigure_dependents_with_live_pointers, BreakageRes, DependencyError, DependencyErrors,
+    reconfigure_dependents_with_live_pointers, BreakTransitiveReceipts, BreakageRes,
+    DependencyError, DependencyErrors,
 };
 use crate::install::cleanup::{cleanup, update_dependency_errors_of_dependents};
 use crate::install::progress::{InstallProgress, InstallProgressTracker};
@@ -43,20 +45,20 @@ use crate::s9pk::manifest::{Manifest, PackageId};
 use crate::s9pk::reader::S9pkReader;
 use crate::status::{MainStatus, Status};
 use crate::util::io::{copy_and_shutdown, response_to_reader};
-use crate::util::serde::{display_serializable, IoFormat, Port};
+use crate::util::serde::{display_serializable, Port};
 use crate::util::{display_none, AsyncFileExt, Version};
 use crate::version::{Current, VersionT};
-use crate::volume::asset_dir;
+use crate::volume::{asset_dir, script_dir};
 use crate::{Error, ErrorKind, ResultExt};
 
 pub mod cleanup;
 pub mod progress;
 pub mod update;
 
-pub const PKG_ARCHIVE_DIR: &'static str = "package-data/archive";
-pub const PKG_PUBLIC_DIR: &'static str = "package-data/public";
-pub const PKG_DOCKER_DIR: &'static str = "package-data/docker";
-pub const PKG_WASM_DIR: &'static str = "package-data/wasm";
+pub const PKG_ARCHIVE_DIR: &str = "package-data/archive";
+pub const PKG_PUBLIC_DIR: &str = "package-data/public";
+pub const PKG_DOCKER_DIR: &str = "package-data/docker";
+pub const PKG_WASM_DIR: &str = "package-data/wasm";
 
 #[command(display(display_serializable))]
 pub async fn list(#[context] ctx: RpcContext) -> Result<Vec<(PackageId, Version)>, Error> {
@@ -119,9 +121,9 @@ impl std::fmt::Display for MinMax {
 pub async fn install(
     #[context] ctx: RpcContext,
     #[arg] id: String,
-    #[arg(short = "m", long = "marketplace-url", rename = "marketplace-url")]
+    #[arg(short = 'm', long = "marketplace-url", rename = "marketplace-url")]
     marketplace_url: Option<Url>,
-    #[arg(short = "v", long = "version-spec", rename = "version-spec")] version_spec: Option<
+    #[arg(short = 'v', long = "version-spec", rename = "version-spec")] version_spec: Option<
         String,
     >,
     #[arg(long = "version-priority", rename = "version-priority")] version_priority: Option<MinMax>,
@@ -141,7 +143,7 @@ pub async fn install(
         version,
         version_priority,
         Current::new().compat(),
-        platforms::TARGET_ARCH,
+        &*crate::ARCH,
     ))
     .await
     .with_kind(crate::ErrorKind::Registry)?
@@ -157,7 +159,7 @@ pub async fn install(
         man.version,
         version_priority,
         Current::new().compat(),
-        platforms::TARGET_ARCH,
+        &*crate::ARCH,
     ))
     .await
     .with_kind(crate::ErrorKind::Registry)?
@@ -189,9 +191,10 @@ pub async fn install(
                         id,
                         man.version,
                         Current::new().compat(),
-                        platforms::TARGET_ARCH,
+                        &*crate::ARCH,
                     ))
-                    .await?,
+                    .await?
+                    .error_for_status()?,
                 ),
                 &mut File::create(public_dir_path.join("LICENSE.md")).await?,
             )
@@ -207,9 +210,10 @@ pub async fn install(
                         id,
                         man.version,
                         Current::new().compat(),
-                        platforms::TARGET_ARCH,
+                        &*crate::ARCH,
                     ))
-                    .await?,
+                    .await?
+                    .error_for_status()?,
                 ),
                 &mut File::create(public_dir_path.join("INSTRUCTIONS.md")).await?,
             )
@@ -225,9 +229,10 @@ pub async fn install(
                         id,
                         man.version,
                         Current::new().compat(),
-                        platforms::TARGET_ARCH,
+                        &*crate::ARCH,
                     ))
-                    .await?,
+                    .await?
+                    .error_for_status()?,
                 ),
                 &mut File::create(public_dir_path.join(format!("icon.{}", icon_type))).await?,
             )
@@ -329,9 +334,37 @@ pub async fn install(
 pub async fn sideload(
     #[context] ctx: RpcContext,
     #[arg] manifest: Manifest,
+    #[arg] icon: Option<String>,
 ) -> Result<RequestGuid, Error> {
     let new_ctx = ctx.clone();
     let guid = RequestGuid::new();
+    if let Some(icon) = icon {
+        use tokio::io::AsyncWriteExt;
+
+        let public_dir_path = ctx
+            .datadir
+            .join(PKG_PUBLIC_DIR)
+            .join(&manifest.id)
+            .join(manifest.version.as_str());
+        tokio::fs::create_dir_all(&public_dir_path).await?;
+
+        let invalid_data_url =
+            || Error::new(eyre!("Invalid Icon Data URL"), ErrorKind::InvalidRequest);
+        let data = icon
+            .strip_prefix(&format!(
+                "data:image/{};base64,",
+                manifest.assets.icon_type()
+            ))
+            .ok_or_else(&invalid_data_url)?;
+        let mut icon_file =
+            File::create(public_dir_path.join(format!("icon.{}", manifest.assets.icon_type())))
+                .await?;
+        icon_file
+            .write_all(&base64::decode(data).with_kind(ErrorKind::InvalidRequest)?)
+            .await?;
+        icon_file.sync_all().await?;
+    }
+
     let handler = Box::new(|req: Request<Body>| {
         async move {
             let content_length = match req.headers().get(CONTENT_LENGTH).map(|a| a.to_str()) {
@@ -365,13 +398,13 @@ pub async fn sideload(
             match pde.take() {
                 Some(PackageDataEntry::Installed {
                     installed,
-                    manifest,
                     static_files,
+                    ..
                 }) => {
                     *pde = Some(PackageDataEntry::Updating {
                         install_progress: progress.clone(),
                         installed,
-                        manifest,
+                        manifest: manifest.clone(),
                         static_files,
                     })
                 }
@@ -445,23 +478,11 @@ pub async fn sideload(
         }
         .boxed()
     });
-    let cont = RpcContinuation {
-        created_at: Instant::now(), // TODO
-        handler: handler,
-    };
-    // gc the map
-    let mut guard = ctx.rpc_stream_continuations.lock().await;
-    let garbage_collected = std::mem::take(&mut *guard)
-        .into_iter()
-        .filter(|(_, v)| v.created_at.elapsed() < Duration::from_secs(30))
-        .collect::<BTreeMap<RequestGuid, RpcContinuation>>();
-    *guard = garbage_collected;
-    drop(guard);
-    // insert the new continuation
-    ctx.rpc_stream_continuations
-        .lock()
-        .await
-        .insert(guid.clone(), cont);
+    ctx.add_continuation(
+        guid.clone(),
+        RpcContinuation::rest(handler, Duration::from_secs(30)),
+    )
+    .await;
     Ok(guid)
 }
 
@@ -477,14 +498,21 @@ async fn cli_install(
         let path = PathBuf::from(target);
 
         // inspect manifest no verify
-        let manifest = crate::inspect::manifest(path.clone(), true, Some(IoFormat::Json)).await?;
+        let mut reader = S9pkReader::open(&path, false).await?;
+        let manifest = reader.manifest().await?;
+        let icon = reader.icon().await?.to_vec().await?;
+        let icon_str = format!(
+            "data:image/{};base64,{}",
+            manifest.assets.icon_type(),
+            base64::encode(&icon)
+        );
 
         // rpc call remote sideload
         tracing::debug!("calling package.sideload");
         let guid = rpc_toolkit::command_helpers::call_remote(
             ctx.clone(),
             "package.sideload",
-            serde_json::json!({ "manifest": manifest }),
+            serde_json::json!({ "manifest": manifest, "icon": icon_str }),
             PhantomData::<RequestGuid>,
         )
         .await?
@@ -495,14 +523,9 @@ async fn cli_install(
         let file = tokio::fs::File::open(path).await?;
         let content_length = file.metadata().await?.len();
         let body = Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
-        let client = reqwest::Client::new();
-        let res = client
-            .post(format!(
-                "{}://{}/rest/rpc/{}",
-                ctx.protocol(),
-                ctx.host(),
-                guid
-            ))
+        let res = ctx
+            .client
+            .post(format!("{}/rest/rpc/{}", ctx.base_url, guid,))
             .header(CONTENT_LENGTH, content_length)
             .body(body)
             .send()
@@ -562,8 +585,15 @@ pub async fn uninstall_dry(
     let mut db = ctx.db.handle();
     let mut tx = db.begin().await?;
     let mut breakages = BTreeMap::new();
-    break_all_dependents_transitive(&mut tx, &id, DependencyError::NotInstalled, &mut breakages)
-        .await?;
+    let receipts = BreakTransitiveReceipts::new(&mut tx).await?;
+    break_all_dependents_transitive(
+        &mut tx,
+        &id,
+        DependencyError::NotInstalled,
+        &mut breakages,
+        &receipts,
+    )
+    .await?;
 
     tx.abort().await?;
 
@@ -678,6 +708,35 @@ pub async fn delete_recovered(
     })
 }
 
+pub struct DownloadInstallReceipts {
+    package_receipts: crate::db::package::PackageReceipts,
+    manifest_receipts: crate::db::package::ManifestReceipts,
+}
+
+impl DownloadInstallReceipts {
+    pub async fn new<'a>(db: &'a mut impl DbHandle, id: &PackageId) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let setup = Self::setup(&mut locks, id);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(
+        locks: &mut Vec<patch_db::LockTargetId>,
+        id: &PackageId,
+    ) -> impl FnOnce(&patch_db::Verifier) -> Result<Self, Error> {
+        let package_receipts = crate::db::package::PackageReceipts::setup(locks);
+        let manifest_receipts = crate::db::package::ManifestReceipts::setup(locks, id);
+
+        move |skeleton_key| {
+            Ok(Self {
+                package_receipts: package_receipts(skeleton_key)?,
+                manifest_receipts: manifest_receipts(skeleton_key)?,
+            })
+        }
+    }
+}
+
 #[instrument(skip(ctx, temp_manifest, s9pk))]
 pub async fn download_install_s9pk(
     ctx: &RpcContext,
@@ -692,14 +751,14 @@ pub async fn download_install_s9pk(
     if let Err(e) = async {
         let mut db_handle = ctx.db.handle();
         let mut tx = db_handle.begin().await?;
+        let receipts = DownloadInstallReceipts::new(&mut tx, &pkg_id).await?;
         // Build set of existing manifests
         let mut manifests = Vec::new();
-        for pkg in crate::db::package::get_packages(&mut tx).await? {
-            match crate::db::package::get_manifest(&mut tx, &pkg).await? {
-                Some(m) => {
-                    manifests.push(m);
-                }
-                None => {}
+        for pkg in crate::db::package::get_packages(&mut tx, &receipts.package_receipts).await? {
+            if let Some(m) =
+                crate::db::package::get_manifest(&mut tx, &pkg, &receipts.manifest_receipts).await?
+            {
+                manifests.push(m);
             }
         }
         // Build map of current port -> ssl mappings
@@ -732,6 +791,7 @@ pub async fn download_install_s9pk(
                 }
             }
         }
+        drop(receipts);
         tx.save().await?;
         drop(db_handle);
 
@@ -792,8 +852,9 @@ pub async fn download_install_s9pk(
     {
         let mut handle = ctx.db.handle();
         let mut tx = handle.begin().await?;
+        let receipts = cleanup::CleanupFailedReceipts::new(&mut tx).await?;
 
-        if let Err(e) = cleanup_failed(&ctx, &mut tx, pkg_id).await {
+        if let Err(e) = cleanup_failed(&ctx, &mut tx, pkg_id, &receipts).await {
             tracing::error!("Failed to clean up {}@{}: {}", pkg_id, version, e);
             tracing::debug!("{:?}", e);
         } else {
@@ -802,6 +863,39 @@ pub async fn download_install_s9pk(
         Err(e)
     } else {
         Ok(())
+    }
+}
+
+pub struct InstallS9Receipts {
+    config: ConfigReceipts,
+
+    recovered_packages: LockReceipt<BTreeMap<PackageId, RecoveredPackageInfo>, ()>,
+}
+
+impl InstallS9Receipts {
+    pub async fn new<'a>(db: &'a mut impl DbHandle) -> Result<Self, Error> {
+        let mut locks = Vec::new();
+
+        let setup = Self::setup(&mut locks);
+        Ok(setup(&db.lock_all(locks).await?)?)
+    }
+
+    pub fn setup(
+        locks: &mut Vec<patch_db::LockTargetId>,
+    ) -> impl FnOnce(&patch_db::Verifier) -> Result<Self, Error> {
+        let config = ConfigReceipts::setup(locks);
+
+        let recovered_packages = crate::db::DatabaseModel::new()
+            .recovered_packages()
+            .make_locker(LockType::Write)
+            .add_to_keys(locks);
+
+        move |skeleton_key| {
+            Ok(Self {
+                config: config(skeleton_key)?,
+                recovered_packages: recovered_packages.verify(skeleton_key)?,
+            })
+        }
     }
 }
 
@@ -848,7 +942,7 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
                 dep,
                 info.version,
                 Current::new().compat(),
-                platforms::TARGET_ARCH,
+                &*crate::ARCH,
             ))
             .await
             .with_kind(crate::ErrorKind::Registry)?
@@ -883,7 +977,7 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
                         dep,
                         info.version,
                         Current::new().compat(),
-                        platforms::TARGET_ARCH,
+                        &*crate::ARCH,
                     ))
                     .await
                     .with_kind(crate::ErrorKind::Registry)?;
@@ -1046,6 +1140,18 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
             let mut tar = tokio_tar::Archive::new(rdr.assets().await?);
             tar.unpack(asset_dir).await?;
 
+            let script_dir = script_dir(&ctx.datadir, pkg_id, version);
+            if tokio::fs::metadata(&script_dir).await.is_err() {
+                tokio::fs::create_dir_all(&script_dir).await?;
+            }
+            if let Some(mut hdl) = rdr.scripts().await? {
+                tokio::io::copy(
+                    &mut hdl,
+                    &mut File::create(dbg!(script_dir.join("embassy.js"))).await?,
+                )
+                .await?;
+            }
+
             Ok(())
         })
         .await?;
@@ -1082,18 +1188,20 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
     tracing::info!("Install {}@{}: Created manager", pkg_id, version);
 
     let static_files = StaticFiles::local(pkg_id, version, manifest.assets.icon_type());
-    let current_dependencies: BTreeMap<_, _> = manifest
-        .dependencies
-        .0
-        .iter()
-        .filter_map(|(id, info)| {
-            if info.requirement.required() {
-                Some((id.clone(), CurrentDependencyInfo::default()))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let current_dependencies: CurrentDependencies = CurrentDependencies(
+        manifest
+            .dependencies
+            .0
+            .iter()
+            .filter_map(|(id, info)| {
+                if info.requirement.required() {
+                    Some((id.clone(), CurrentDependencyInfo::default()))
+                } else {
+                    None
+                }
+            })
+            .collect(),
+    );
     let current_dependents = {
         let mut deps = BTreeMap::new();
         for package in crate::db::DatabaseModel::new()
@@ -1139,7 +1247,7 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
                 deps.insert(package, dep);
             }
         }
-        deps
+        CurrentDependents(deps)
     };
     let mut pde = model
         .clone()
@@ -1183,6 +1291,8 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
         },
     );
     pde.save(&mut tx).await?;
+    let receipts = InstallS9Receipts::new(&mut tx).await?;
+    // UpdateDependencyReceipts
     let mut dep_errs = model
         .expect(&mut tx)
         .await?
@@ -1193,38 +1303,44 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
         .dependency_errors()
         .get_mut(&mut tx)
         .await?;
-    *dep_errs = DependencyErrors::init(ctx, &mut tx, &manifest, &current_dependencies).await?;
+    *dep_errs = DependencyErrors::init(
+        ctx,
+        &mut tx,
+        &manifest,
+        &current_dependencies,
+        &receipts.config.try_heal_receipts,
+    )
+    .await?;
     dep_errs.save(&mut tx).await?;
 
     if let PackageDataEntry::Updating {
-        installed: prev,
-        manifest: prev_manifest,
-        ..
+        installed: prev, ..
     } = prev
     {
         let prev_is_configured = prev.status.configured;
-        let prev_migration = prev_manifest
+        let prev_migration = prev
+            .manifest
             .migrations
             .to(
                 ctx,
                 version,
                 pkg_id,
-                &prev_manifest.version,
-                &prev_manifest.volumes,
+                &prev.manifest.version,
+                &prev.manifest.volumes,
             )
             .map(futures::future::Either::Left);
         let migration = manifest
             .migrations
             .from(
                 ctx,
-                &prev_manifest.version,
+                &prev.manifest.version,
                 pkg_id,
                 version,
                 &manifest.volumes,
             )
             .map(futures::future::Either::Right);
 
-        let viable_migration = if prev_manifest.version > manifest.version {
+        let viable_migration = if prev.manifest.version > manifest.version {
             prev_migration.or(migration)
         } else {
             migration.or(prev_migration)
@@ -1245,8 +1361,26 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
                 false,
                 &mut BTreeMap::new(),
                 &mut BTreeMap::new(),
+                &receipts.config,
             )
             .await?;
+        } else {
+            remove_from_current_dependents_lists(
+                &mut tx,
+                pkg_id,
+                &prev.current_dependencies,
+                &receipts.config.current_dependents,
+            )
+            .await?; // remove previous
+            add_dependent_to_current_dependents_lists(
+                &mut tx,
+                pkg_id,
+                &current_dependencies,
+                &receipts.config.current_dependents,
+            )
+            .await?; // add new
+        }
+        if configured || manifest.config.is_none() {
             let mut main_status = crate::db::DatabaseModel::new()
                 .package_data()
                 .idx_model(pkg_id)
@@ -1262,17 +1396,16 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
             *main_status = prev.status.main;
             main_status.save(&mut tx).await?;
         }
-        remove_from_current_dependents_lists(&mut tx, pkg_id, prev.current_dependencies.keys())
-            .await?; // remove previous
-        add_dependent_to_current_dependents_lists(&mut tx, pkg_id, &current_dependencies).await?; // add new
         update_dependency_errors_of_dependents(
             ctx,
             &mut tx,
             pkg_id,
-            current_dependents
-                .keys()
-                .chain(prev.current_dependents.keys())
-                .collect::<BTreeSet<_>>(),
+            &CurrentDependents({
+                let mut current_dependents = current_dependents.0.clone();
+                current_dependents.append(&mut prev.current_dependents.0.clone());
+                current_dependents
+            }),
+            &receipts.config.update_dependency_receipts,
         )
         .await?;
         if &prev.manifest.version != version {
@@ -1291,39 +1424,84 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
                 &manifest.volumes,
             )
             .await?;
-        add_dependent_to_current_dependents_lists(&mut tx, pkg_id, &current_dependencies).await?;
-        update_dependency_errors_of_dependents(ctx, &mut tx, pkg_id, current_dependents.keys())
-            .await?;
+        add_dependent_to_current_dependents_lists(
+            &mut tx,
+            pkg_id,
+            &current_dependencies,
+            &receipts.config.current_dependents,
+        )
+        .await?;
+        update_dependency_errors_of_dependents(
+            ctx,
+            &mut tx,
+            pkg_id,
+            &current_dependents,
+            &receipts.config.update_dependency_receipts,
+        )
+        .await?;
     } else if let Some(recovered) = {
-        // solve taxonomy escalation
-        crate::db::DatabaseModel::new()
-            .recovered_packages()
-            .lock(&mut tx, LockType::Write)
-            .await?;
-        crate::db::DatabaseModel::new()
-            .recovered_packages()
-            .idx_model(pkg_id)
-            .get(&mut tx, true)
+        receipts
+            .recovered_packages
+            .get(&mut tx)
             .await?
-            .into_owned()
+            .remove(pkg_id)
     } {
-        handle_recovered_package(recovered, manifest, ctx, pkg_id, version, &mut tx).await?;
-        add_dependent_to_current_dependents_lists(&mut tx, pkg_id, &current_dependencies).await?;
-        update_dependency_errors_of_dependents(ctx, &mut tx, pkg_id, current_dependents.keys())
-            .await?;
+        handle_recovered_package(
+            recovered,
+            manifest,
+            ctx,
+            pkg_id,
+            version,
+            &mut tx,
+            &receipts.config,
+        )
+        .await?;
+        add_dependent_to_current_dependents_lists(
+            &mut tx,
+            pkg_id,
+            &current_dependencies,
+            &receipts.config.current_dependents,
+        )
+        .await?;
+        update_dependency_errors_of_dependents(
+            ctx,
+            &mut tx,
+            pkg_id,
+            &current_dependents,
+            &receipts.config.update_dependency_receipts,
+        )
+        .await?;
     } else {
-        add_dependent_to_current_dependents_lists(&mut tx, pkg_id, &current_dependencies).await?;
-        update_dependency_errors_of_dependents(ctx, &mut tx, pkg_id, current_dependents.keys())
-            .await?;
+        add_dependent_to_current_dependents_lists(
+            &mut tx,
+            pkg_id,
+            &current_dependencies,
+            &receipts.config.current_dependents,
+        )
+        .await?;
+        update_dependency_errors_of_dependents(
+            ctx,
+            &mut tx,
+            pkg_id,
+            &current_dependents,
+            &receipts.config.update_dependency_receipts,
+        )
+        .await?;
     }
 
-    crate::db::DatabaseModel::new()
-        .recovered_packages()
-        .remove(&mut tx, pkg_id)
+    let recovered_packages = {
+        let mut r = receipts.recovered_packages.get(&mut tx).await?;
+        r.remove(pkg_id);
+        r
+    };
+    receipts
+        .recovered_packages
+        .set(&mut tx, recovered_packages)
         .await?;
 
     if let Some(installed) = pde.installed() {
-        reconfigure_dependents_with_live_pointers(ctx, &mut tx, installed).await?;
+        reconfigure_dependents_with_live_pointers(ctx, &mut tx, &receipts.config, installed)
+            .await?;
     }
 
     sql_tx.commit().await?;
@@ -1334,7 +1512,7 @@ pub async fn install_s9pk<R: AsyncRead + AsyncSeek + Unpin>(
     Ok(())
 }
 
-#[instrument(skip(ctx, tx))]
+#[instrument(skip(ctx, tx, receipts))]
 async fn handle_recovered_package(
     recovered: RecoveredPackageInfo,
     manifest: Manifest,
@@ -1342,6 +1520,7 @@ async fn handle_recovered_package(
     pkg_id: &PackageId,
     version: &Version,
     tx: &mut patch_db::Transaction<&mut patch_db::PatchDbHandle>,
+    receipts: &ConfigReceipts,
 ) -> Result<(), Error> {
     let configured = if let Some(migration) =
         manifest
@@ -1362,6 +1541,7 @@ async fn handle_recovered_package(
             false,
             &mut BTreeMap::new(),
             &mut BTreeMap::new(),
+            &receipts,
         )
         .await?;
     }

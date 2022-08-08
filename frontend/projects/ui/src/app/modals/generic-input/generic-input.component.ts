@@ -1,20 +1,30 @@
 import { Component, Input, ViewChild } from '@angular/core'
 import { ModalController, IonicSafeString, IonInput } from '@ionic/angular'
 import { getErrorMessage } from '@start9labs/shared'
+import { MaskPipe } from 'src/app/pipes/mask/mask.pipe'
 
 @Component({
   selector: 'generic-input',
   templateUrl: './generic-input.component.html',
   styleUrls: ['./generic-input.component.scss'],
+  providers: [MaskPipe],
 })
 export class GenericInputComponent {
-  @ViewChild('mainInput') elem: IonInput
-  @Input() options: GenericInputOptions
-  value: string
-  unmasked = false
-  error: string | IonicSafeString
+  @ViewChild('mainInput') elem?: IonInput
 
-  constructor(private readonly modalCtrl: ModalController) {}
+  @Input() options!: GenericInputOptions
+
+  value!: string
+  masked!: boolean
+
+  maskedValue?: string
+
+  error: string | IonicSafeString = ''
+
+  constructor(
+    private readonly modalCtrl: ModalController,
+    private readonly mask: MaskPipe,
+  ) {}
 
   ngOnInit() {
     const defaultOptions: Partial<GenericInputOptions> = {
@@ -29,19 +39,29 @@ export class GenericInputComponent {
       ...this.options,
     }
 
-    this.value = this.options.initialValue
+    this.masked = !!this.options.useMask
+    this.value = this.options.initialValue || ''
   }
 
   ngAfterViewInit() {
-    setTimeout(() => this.elem.setFocus(), 400)
+    setTimeout(() => this.elem?.setFocus(), 400)
   }
 
   toggleMask() {
-    this.unmasked = !this.unmasked
+    this.masked = !this.masked
   }
 
   cancel() {
     this.modalCtrl.dismiss()
+  }
+
+  transformInput(newValue: string) {
+    let i = 0
+    this.value = newValue
+      .split('')
+      .map(x => (x === '●' ? this.value[i++] : x))
+      .join('')
+    this.maskedValue = this.mask.transform(this.value)
   }
 
   async submit() {
@@ -52,7 +72,7 @@ export class GenericInputComponent {
     try {
       await this.options.submitFn(value)
       this.modalCtrl.dismiss(undefined, 'success')
-    } catch (e) {
+    } catch (e: any) {
       this.error = getErrorMessage(e)
     }
   }

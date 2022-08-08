@@ -8,9 +8,9 @@ use patch_db::HasModel;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use crate::action::ActionImplementation;
 use crate::context::RpcContext;
 use crate::id::ImageId;
+use crate::procedure::{PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::util::Version;
 use crate::volume::Volumes;
@@ -19,27 +19,36 @@ use crate::{Error, ResultExt};
 #[derive(Clone, Debug, Default, Deserialize, Serialize, HasModel)]
 #[serde(rename_all = "kebab-case")]
 pub struct Migrations {
-    pub from: IndexMap<VersionRange, ActionImplementation>,
-    pub to: IndexMap<VersionRange, ActionImplementation>,
+    pub from: IndexMap<VersionRange, PackageProcedure>,
+    pub to: IndexMap<VersionRange, PackageProcedure>,
 }
 impl Migrations {
     #[instrument]
-    pub fn validate(&self, volumes: &Volumes, image_ids: &BTreeSet<ImageId>) -> Result<(), Error> {
+    pub fn validate(
+        &self,
+        eos_version: &Version,
+        volumes: &Volumes,
+        image_ids: &BTreeSet<ImageId>,
+    ) -> Result<(), Error> {
         for (version, migration) in &self.from {
-            migration.validate(volumes, image_ids, true).with_ctx(|_| {
-                (
-                    crate::ErrorKind::ValidateS9pk,
-                    format!("Migration from {}", version),
-                )
-            })?;
+            migration
+                .validate(eos_version, volumes, image_ids, true)
+                .with_ctx(|_| {
+                    (
+                        crate::ErrorKind::ValidateS9pk,
+                        format!("Migration from {}", version),
+                    )
+                })?;
         }
         for (version, migration) in &self.to {
-            migration.validate(volumes, image_ids, true).with_ctx(|_| {
-                (
-                    crate::ErrorKind::ValidateS9pk,
-                    format!("Migration to {}", version),
-                )
-            })?;
+            migration
+                .validate(eos_version, volumes, image_ids, true)
+                .with_ctx(|_| {
+                    (
+                        crate::ErrorKind::ValidateS9pk,
+                        format!("Migration to {}", version),
+                    )
+                })?;
         }
         Ok(())
     }
@@ -64,7 +73,7 @@ impl Migrations {
                         ctx,
                         pkg_id,
                         pkg_version,
-                        Some("Migration"), // Migrations cannot be executed concurrently
+                        ProcedureName::Migration, // Migrations cannot be executed concurrently
                         volumes,
                         Some(version),
                         false,
@@ -99,7 +108,7 @@ impl Migrations {
                         ctx,
                         pkg_id,
                         pkg_version,
-                        Some("Migration"),
+                        ProcedureName::Migration,
                         volumes,
                         Some(version),
                         false,

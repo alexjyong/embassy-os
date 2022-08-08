@@ -81,7 +81,11 @@ async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
                 .expect("send shutdown signal");
         });
 
-        rpc_ctx.set_nginx_conf(&mut rpc_ctx.db.handle()).await?;
+        let mut db = rpc_ctx.db.handle();
+        let receipts = embassy::context::rpc::RpcSetNginxReceipts::new(&mut db).await?;
+
+        rpc_ctx.set_nginx_conf(&mut db, receipts).await?;
+        drop(db);
         let auth = auth(rpc_ctx.clone());
         let ctx = rpc_ctx.clone();
         let server = rpc_server!({
@@ -147,6 +151,33 @@ async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
                                     "/ws/db" => {
                                         Ok(subscribe(ctx, req).await.unwrap_or_else(err_to_500))
                                     }
+                                    path if path.starts_with("/ws/rpc/") => {
+                                        match RequestGuid::from(
+                                            path.strip_prefix("/ws/rpc/").unwrap(),
+                                        ) {
+                                            None => {
+                                                tracing::debug!("No Guid Path");
+                                                Response::builder()
+                                                    .status(StatusCode::BAD_REQUEST)
+                                                    .body(Body::empty())
+                                            }
+                                            Some(guid) => {
+                                                match ctx.get_ws_continuation_handler(&guid).await {
+                                                    Some(cont) => match cont(req).await {
+                                                        Ok(r) => Ok(r),
+                                                        Err(e) => Response::builder()
+                                                            .status(
+                                                                StatusCode::INTERNAL_SERVER_ERROR,
+                                                            )
+                                                            .body(Body::from(format!("{}", e))),
+                                                    },
+                                                    _ => Response::builder()
+                                                        .status(StatusCode::NOT_FOUND)
+                                                        .body(Body::empty()),
+                                                }
+                                            }
+                                        }
+                                    }
                                     path if path.starts_with("/rest/rpc/") => {
                                         match RequestGuid::from(
                                             path.strip_prefix("/rest/rpc/").unwrap(),
@@ -158,16 +189,12 @@ async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
                                                     .body(Body::empty())
                                             }
                                             Some(guid) => {
-                                                match ctx
-                                                    .rpc_stream_continuations
-                                                    .lock()
-                                                    .await
-                                                    .remove(&guid)
+                                                match ctx.get_rest_continuation_handler(&guid).await
                                                 {
                                                     None => Response::builder()
                                                         .status(StatusCode::NOT_FOUND)
                                                         .body(Body::empty()),
-                                                    Some(cont) => match (cont.handler)(req).await {
+                                                    Some(cont) => match cont(req).await {
                                                         Ok(r) => Ok(r),
                                                         Err(e) => Response::builder()
                                                             .status(
@@ -283,7 +310,7 @@ fn main() {
     let matches = clap::App::new("embassyd")
         .arg(
             clap::Arg::with_name("config")
-                .short("c")
+                .short('c')
                 .long("config")
                 .takes_value(true),
         )
@@ -339,6 +366,7 @@ fn main() {
                             e,
                         )
                         .await?;
+                        let mut shutdown = ctx.shutdown.subscribe();
                         rpc_server!({
                             command: embassy::diagnostic_api,
                             context: ctx.clone(),
@@ -356,7 +384,7 @@ fn main() {
                         })
                         .await
                         .with_kind(embassy::ErrorKind::Network)?;
-                        Ok::<_, Error>(None)
+                        Ok::<_, Error>(shutdown.recv().await.with_kind(crate::ErrorKind::Unknown)?)
                     })()
                     .await
                 }

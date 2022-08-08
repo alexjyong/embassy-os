@@ -4,7 +4,7 @@ import { Routes, RouterModule } from '@angular/router'
 import { IonicModule } from '@ionic/angular'
 import { AppShowPage } from './app-show.page'
 import { EmverPipesModule } from '@start9labs/shared'
-import { InstallWizardComponentModule } from 'src/app/components/install-wizard/install-wizard.component.module'
+import { AppWizardComponentModule } from 'src/app/components/app-wizard/app-wizard.component.module'
 import { StatusComponentModule } from 'src/app/components/status/status.component.module'
 import { AppConfigPageModule } from 'src/app/modals/app-config/app-config.module'
 import { LaunchablePipeModule } from 'src/app/pipes/launchable/launchable.module'
@@ -20,7 +20,8 @@ import { ToHealthChecksPipe } from './pipes/to-health-checks.pipe'
 import { ToButtonsPipe } from './pipes/to-buttons.pipe'
 import { ToDependenciesPipe } from './pipes/to-dependencies.pipe'
 import { ToStatusPipe } from './pipes/to-status.pipe'
-import { InstallStatePipe } from './pipes/install-state.pipe'
+import { ProgressDataPipe } from './pipes/progress-data.pipe'
+import { ActionMarketplaceComponentModule } from 'src/app/modals/action-marketplace/action-marketplace.component.module'
 
 const routes: Routes = [
   {
@@ -33,7 +34,7 @@ const routes: Routes = [
   declarations: [
     AppShowPage,
     HealthColorPipe,
-    InstallStatePipe,
+    ProgressDataPipe,
     ToHealthChecksPipe,
     ToButtonsPipe,
     ToDependenciesPipe,
@@ -50,11 +51,12 @@ const routes: Routes = [
     StatusComponentModule,
     IonicModule,
     RouterModule.forChild(routes),
-    InstallWizardComponentModule,
+    AppWizardComponentModule,
     AppConfigPageModule,
     EmverPipesModule,
     LaunchablePipeModule,
     UiPipeModule,
+    ActionMarketplaceComponentModule,
   ],
 })
 export class AppShowPageModule {}

@@ -1,12 +1,7 @@
 import { Injectable } from '@angular/core'
 import { pauseFor } from '@start9labs/shared'
-import {
-  ApiService,
-  GetErrorRes,
-  GetLogsReq,
-  GetLogsRes,
-  Log,
-} from './api.service'
+import { ApiService, GetErrorRes } from './api.service'
+import { LogsRes, ServerLogsReq, Log } from '@start9labs/shared'
 
 @Injectable()
 export class MockApiService extends ApiService {
@@ -25,15 +20,17 @@ export class MockApiService extends ApiService {
 
   async restart(): Promise<void> {
     await pauseFor(1000)
-    return null
   }
 
   async forgetDrive(): Promise<void> {
     await pauseFor(1000)
-    return null
   }
 
-  async getLogs(params: GetLogsReq): Promise<GetLogsRes> {
+  async repairDisk(): Promise<void> {
+    await pauseFor(1000)
+  }
+
+  async getLogs(params: ServerLogsReq): Promise<LogsRes> {
     await pauseFor(1000)
     let entries: Log[]
     if (Math.random() < 0.2) {

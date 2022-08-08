@@ -2,7 +2,6 @@
   <div *ngFor="let entry of formGroup.controls | keyvalue: asIsOrder">
     <!-- union enum -->
     <ng-container *ngIf="unionSpec && entry.key === unionSpec.tag.id">
-      <p class="input-label">{{ unionSpec.tag.name }}</p>
       <ion-item>
         <ion-button
           *ngIf="unionSpec.tag.description"
@@ -11,6 +10,7 @@
           size="small"
           (click)="
             presentUnionTagDescription(
+              $event,
               unionSpec.tag.name,
               unionSpec.tag.description
             )
@@ -18,7 +18,11 @@
         >
           <ion-icon name="help-circle-outline"></ion-icon>
         </ion-button>
-        <ion-label>{{ unionSpec.tag.name }}</ion-label>
+        <ion-label>
+          <ion-text color="dark">
+            <b>{{ unionSpec.tag.name }}</b>
+          </ion-text>
+        </ion-label>
         <!-- class enter-click disables the enter click on the modal behind the select -->
         <ion-select
           [interfaceOptions]="{
@@ -40,26 +44,23 @@
         </ion-select>
       </ion-item>
     </ng-container>
-    <ng-container *ngIf="objectSpec[entry.key] as spec">
-      <!-- primitive -->
-      <ng-container
-        *ngIf="['string', 'number', 'boolean', 'enum'] | includes: spec.type"
-      >
+    <div *ngIf="objectSpec[entry.key] as spec" [class.indent]="unionSpec">
+      <!-- string or number -->
+      <ng-container *ngIf="spec.type === 'string' || spec.type === 'number'">
         <!-- label -->
-        <h4 class="input-label">
+        <h4
+          class="input-label"
+          [class.validation-error]="formGroup.get(entry.key)?.errors"
+        >
           <form-label
             [data]="{
               spec: spec,
-              new: current && current[entry.key] === undefined,
+              new: original?.[entry.key] === undefined,
               edited: entry.value.dirty
             }"
           ></form-label>
         </h4>
-        <!-- string or number -->
-        <ion-item
-          color="dark"
-          *ngIf="spec.type === 'string' || spec.type === 'number'"
-        >
+        <ion-item color="dark" class="ion-margin-bottom">
           <ion-textarea
             *ngIf="spec.type === 'string' && spec.textarea; else notTextArea"
             [placeholder]="spec.placeholder || 'Enter ' + spec.name"
@@ -70,12 +71,14 @@
           </ion-textarea>
           <ng-template #notTextArea>
             <ion-input
-              [type]="
-                spec.type === 'string' && spec.masked && !unmasked[entry.key]
-                  ? 'password'
-                  : 'text'
-              "
+              type="text"
               [inputmode]="spec.type === 'number' ? 'tel' : 'text'"
+              [class.redacted]="
+                spec.type === 'string' &&
+                entry.value.value &&
+                spec.masked &&
+                !unmasked[entry.key]
+              "
               [placeholder]="spec.placeholder || 'Enter ' + spec.name"
               [formControlName]="entry.key"
               (ionFocus)="presentAlertChangeWarning(entry.key, spec)"
@@ -83,7 +86,6 @@
             >
             </ion-input>
           </ng-template>
-
           <ion-button
             *ngIf="spec.type === 'string' && spec.masked"
             slot="end"
@@ -105,55 +107,93 @@
             >{{ spec.units }}</ion-note
           >
         </ion-item>
-        <!-- boolean -->
-        <ion-item *ngIf="spec.type === 'boolean'">
-          <ion-label>{{ spec.name }}</ion-label>
-          <ion-toggle
-            slot="end"
-            [formControlName]="entry.key"
-            (ionChange)="handleBooleanChange(entry.key, spec)"
-          ></ion-toggle>
-        </ion-item>
-        <!-- enum -->
-        <ion-item *ngIf="spec.type === 'enum'">
-          <ion-label>{{ spec.name }}</ion-label>
-          <!-- class enter-click disables the enter click on the modal behind the select -->
-          <ion-select
-            [interfaceOptions]="{
-              message: getWarningText(spec.warning),
-              cssClass: 'enter-click'
-            }"
-            slot="end"
-            placeholder="Select"
-            [formControlName]="entry.key"
-            [selectedText]="spec['value-names'][formGroup.get(entry.key).value]"
-          >
-            <ion-select-option
-              *ngFor="let option of spec.values"
-              [value]="option"
-            >
-              {{ spec['value-names'][option] }}
-            </ion-select-option>
-          </ion-select>
-        </ion-item>
+        <form-error
+          *ngIf="formGroup.get(entry.key)?.errors"
+          [control]="$any(formGroup.get(entry.key))"
+          [spec]="spec"
+        >
+        </form-error>
       </ng-container>
+      <!-- boolean or enum -->
+      <ion-item
+        *ngIf="['boolean', 'enum'] | includes: spec.type"
+        style="--padding-start: 0"
+      >
+        <ion-button
+          *ngIf="spec.description"
+          fill="clear"
+          (click)="presentAlertDescription($event, spec)"
+          style="--padding-start: 0"
+        >
+          <ion-icon
+            name="help-circle-outline"
+            slot="icon-only"
+            size="small"
+          ></ion-icon>
+        </ion-button>
+        <ion-label>
+          <b>
+            {{ spec.name }}
+            <ion-text *ngIf="entry.value.dirty" color="warning">
+              (Edited)</ion-text
+            >
+            <ion-text
+              *ngIf="original?.[entry.key] === undefined"
+              color="success"
+            >
+              (New)</ion-text
+            >
+          </b>
+        </ion-label>
+        <!-- boolean -->
+        <ion-toggle
+          *ngIf="spec.type === 'boolean'"
+          slot="end"
+          [formControlName]="entry.key"
+          (ionChange)="handleBooleanChange(entry.key, spec)"
+        ></ion-toggle>
+        <!-- enum -->
+        <!-- class enter-click disables the enter click on the modal behind the select -->
+        <ion-select
+          *ngIf="spec.type === 'enum' && formGroup.get(entry.key) as control"
+          [interfaceOptions]="{
+            message: getWarningText(spec.warning),
+            cssClass: 'enter-click'
+          }"
+          slot="end"
+          placeholder="Select"
+          [formControlName]="entry.key"
+          [selectedText]="spec['value-names'][control.value]"
+        >
+          <ion-select-option
+            *ngFor="let option of spec.values"
+            [value]="option"
+          >
+            {{ spec['value-names'][option] }}
+          </ion-select-option>
+        </ion-select>
+      </ion-item>
       <!-- object or union -->
       <ng-container *ngIf="spec.type === 'object' || spec.type === 'union'">
         <!-- label -->
         <ion-item-divider
           (click)="toggleExpandObject(entry.key)"
           style="cursor: pointer"
+          [class.error-border]="entry.value.invalid"
+          [class.validation-error]="entry.value.invalid"
         >
           <form-label
             [data]="{
               spec: spec,
-              new: current && current[entry.key] === undefined,
+              new: original?.[entry.key] === undefined,
+              newOptions: objectDisplay[entry.key].hasNewOptions,
               edited: entry.value.dirty
             }"
           ></form-label>
           <ion-icon
             slot="end"
             name="chevron-up"
+            [color]="entry.value.invalid ? 'danger' : undefined"
             [ngStyle]="{
               transform: objectDisplay[entry.key].expanded
                 ? 'rotate(0deg)'
@@ -180,9 +220,11 @@
                   : spec.spec
               "
               [formGroup]="$any(entry.value)"
-              [current]="current ? current[entry.key] : undefined"
+              [current]="current?.[entry.key]"
+              [original]="original?.[entry.key]"
               [unionSpec]="spec.type === 'union' ? spec : undefined"
               (onExpand)="resize(entry.key)"
+              (hasNewOptions)="setHasNew(entry.key)"
             ></form-object>
           </div>
         </div>
@@ -194,17 +236,21 @@
           [formArrayName]="entry.key"
         >
           <!-- label -->
-          <ion-item-divider>
+          <ion-item-divider
+            [class.error-border]="entry.value.invalid"
+            [class.validation-error]="entry.value.invalid"
+          >
             <form-label
               [data]="{
                 spec: spec,
-                new: current && current[entry.key] === undefined,
+                new: original?.[entry.key] === undefined,
                 edited: entry.value.dirty
               }"
             ></form-label>
             <ion-button
+              strong
               fill="clear"
-              color="primary"
+              color="dark"
               slot="end"
               (click)="addListItemWrapper(entry.key, spec)"
             >
@@ -212,6 +258,12 @@
               Add
             </ion-button>
           </ion-item-divider>
+          <form-error
+            *ngIf="formGroup.get(entry.key)?.errors"
+            [control]="$any(formGroup.get(entry.key))"
+            [spec]="spec"
+          >
+          </form-error>
           <!-- body -->
           <div class="nested-wrapper">
             <div
@@ -226,7 +278,11 @@
                 *ngIf="spec.subtype === 'object' || spec.subtype === 'union'"
               >
                 <!-- nested label -->
-                <ion-item button (click)="toggleExpandListObject(entry.key, i)">
+                <ion-item
+                  button
+                  (click)="toggleExpandListObject(entry.key, i)"
+                  [class.error-border]="abstractControl.invalid"
+                >
                   <form-label
                     [data]="{
                       spec: $any({
@@ -235,13 +291,13 @@
                           'Entry ' + (i + 1)
                       }),
                       new: false,
-                      edited: abstractControl.dirty,
-                      invalid: abstractControl.invalid
+                      edited: abstractControl.dirty
                     }"
                   ></form-label>
                   <ion-icon
                     slot="end"
                     name="chevron-up"
+                    [color]="abstractControl.invalid ? 'danger' : undefined"
                     [ngStyle]="{
                       transform: objectListDisplay[entry.key][i].expanded
                         ? 'rotate(0deg)'
@@ -252,6 +308,7 @@
                 </ion-item>
                 <!-- nested body -->
                 <div
+                  style="padding-left: 24px"
                   [id]="getElementId(entry.key, i)"
                   [ngStyle]="{
                     'max-height': objectListDisplay[entry.key][i].height,
@@ -270,16 +327,13 @@
                         : $any(spec.spec).spec
                     "
                     [formGroup]="abstractControl"
-                    [current]="
-                      current && current[entry.key]
-                        ? current[entry.key][i]
-                        : undefined
-                    "
+                    [current]="current?.[entry.key]?.[i]"
+                    [original]="original?.[entry.key]?.[i]"
                     [unionSpec]="
                       spec.subtype === 'union' ? $any(spec.spec) : undefined
                     "
                     (onInputChange)="
-                      updateLabel(entry.key, i, spec.spec['display-as'])
+                      updateLabel(entry.key, i, $any(spec.spec)['display-as'])
                     "
                     (onExpand)="resize(entry.key, i)"
                   ></form-object>
@@ -297,11 +351,12 @@
               </ng-container>
               <!-- string or number -->
               <ion-item-group
+                [id]="getElementId(entry.key, i)"
                 *ngIf="spec.subtype === 'string' || spec.subtype === 'number'"
               >
                 <ion-item color="dark">
                   <ion-input
-                    [type]="$any(spec.spec).masked ? 'password' : 'text'"
+                    type="text"
                     [inputmode]="spec.subtype === 'number' ? 'tel' : 'text'"
                     [placeholder]="
                       $any(spec.spec).placeholder || 'Enter ' + spec.name
@@ -310,6 +365,7 @@
                   >
                   </ion-input>
                   <ion-button
+                    strong
                     slot="end"
                     color="danger"
                     (click)="presentAlertDelete(entry.key, i)"
@@ -337,9 +393,10 @@
           <!-- label -->
           <p class="input-label">
             <form-label
+              [class.validation-error]="entry.value.invalid"
               [data]="{
                 spec: spec,
-                new: current && current[entry.key] === undefined,
+                new: original?.[entry.key] === undefined,
                 edited: entry.value.dirty
               }"
             ></form-label>
@@ -358,14 +415,14 @@
               <ion-icon slot="icon-only" name="chevron-down"></ion-icon>
             </ion-button>
           </ion-item>
+          <form-error
+            *ngIf="formGroup.get(entry.key)?.errors"
+            [control]="$any(formGroup.get(entry.key))"
+            [spec]="spec"
+          >
+          </form-error>
         </ng-container>
       </ng-container>
-      <form-error
-        *ngIf="formGroup.get(entry.key).errors"
-        [control]="$any(formGroup.get(entry.key))"
-        [spec]="spec"
-      >
-      </form-error>
-    </ng-container>
+    </div>
   </div>
 </ion-item-group>

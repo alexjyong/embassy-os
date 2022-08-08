@@ -7,16 +7,17 @@ use std::time::Duration;
 
 use color_eyre::eyre::eyre;
 use digest::generic_array::GenericArray;
+use digest::OutputSizeUser;
 use futures::future::BoxFuture;
 use futures::{FutureExt, TryFutureExt, TryStreamExt};
 use nix::unistd::{Gid, Uid};
 use openssl::x509::X509;
-use patch_db::LockType;
+use patch_db::{DbHandle, LockType};
 use rpc_toolkit::command;
 use rpc_toolkit::yajrc::RpcError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::{Executor, Sqlite};
+use sqlx::{Connection, Executor, Sqlite};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use torut::onion::{OnionAddressV3, TorSecretKeyV3};
@@ -35,6 +36,7 @@ use crate::disk::mount::filesystem::cifs::Cifs;
 use crate::disk::mount::filesystem::ReadOnly;
 use crate::disk::mount::guard::TmpMountGuard;
 use crate::disk::util::{pvscan, recovery_info, DiskListResponse, EmbassyOsRecoveryInfo};
+use crate::disk::REPAIR_DISK_PATH;
 use crate::hostname::PRODUCT_KEY_PATH;
 use crate::id::Id;
 use crate::init::init;
@@ -75,9 +77,7 @@ pub struct StatusRes {
 #[command(rpc_only, metadata(authenticated = false))]
 pub async fn status(#[context] ctx: SetupContext) -> Result<StatusRes, Error> {
     Ok(StatusRes {
-        product_key: tokio::fs::metadata("/embassy-os/product_key.txt")
-            .await
-            .is_ok(),
+        product_key: tokio::fs::metadata(PRODUCT_KEY_PATH).await.is_ok(),
         migrating: ctx.recovery_status.read().await.is_some(),
     })
 }
@@ -96,38 +96,87 @@ pub async fn list_disks() -> Result<DiskListResponse, Error> {
 pub async fn attach(
     #[context] ctx: SetupContext,
     #[arg] guid: Arc<String>,
+    #[arg(rename = "embassy-password")] password: Option<String>,
 ) -> Result<SetupResult, Error> {
-    crate::disk::main::import(
+    let requires_reboot = crate::disk::main::import(
         &*guid,
         &ctx.datadir,
-        RepairStrategy::Preen,
+        if tokio::fs::metadata(REPAIR_DISK_PATH).await.is_ok() {
+            RepairStrategy::Aggressive
+        } else {
+            RepairStrategy::Preen
+        },
         DEFAULT_PASSWORD,
     )
     .await?;
+    if tokio::fs::metadata(REPAIR_DISK_PATH).await.is_ok() {
+        tokio::fs::remove_file(REPAIR_DISK_PATH)
+            .await
+            .with_ctx(|_| (ErrorKind::Filesystem, REPAIR_DISK_PATH))?;
+    }
+    if requires_reboot.0 {
+        crate::disk::main::export(&*guid, &ctx.datadir).await?;
+        return Err(Error::new(
+            eyre!(
+                "Errors were corrected with your disk, but the Embassy must be restarted in order to proceed"
+            ),
+            ErrorKind::DiskManagement,
+        ));
+    }
+    let product_key = ctx.product_key().await?;
     let product_key_path = Path::new("/embassy-data/main/product_key.txt");
     if tokio::fs::metadata(product_key_path).await.is_ok() {
-        let pkey = tokio::fs::read_to_string(product_key_path).await?;
-        if pkey.trim() != &*ctx.product_key().await? {
+        let pkey = Arc::new(
+            tokio::fs::read_to_string(product_key_path)
+                .await?
+                .trim()
+                .to_owned(),
+        );
+        if pkey != product_key {
             crate::disk::main::export(&*guid, &ctx.datadir).await?;
             return Err(Error::new(
-                eyre!("The EmbassyOS product key does not match the supplied drive"),
+                eyre!(
+                    "The EmbassyOS product key does not match the supplied drive: {}",
+                    pkey
+                ),
                 ErrorKind::ProductKeyMismatch,
             ));
         }
     }
     init(
         &RpcContextConfig::load(ctx.config_path.as_ref()).await?,
-        &*ctx.product_key().await?,
+        &*product_key,
     )
     .await?;
     let secrets = ctx.secret_store().await?;
-    let tor_key = crate::net::tor::os_key(&mut secrets.acquire().await?).await?;
+    let db = ctx.db(&secrets).await?;
+    let mut secrets_handle = secrets.acquire().await?;
+    let mut db_handle = db.handle();
+    let mut secrets_tx = secrets_handle.begin().await?;
+    let mut db_tx = db_handle.begin().await?;
+
+    if let Some(password) = password {
+        let set_password_receipt = crate::auth::SetPasswordReceipt::new(&mut db_tx).await?;
+        crate::auth::set_password(
+            &mut db_tx,
+            &set_password_receipt,
+            &mut secrets_tx,
+            &password,
+        )
+        .await?;
+    }
+
+    let tor_key = crate::net::tor::os_key(&mut secrets_tx).await?;
+
+    db_tx.commit(None).await?;
+    secrets_tx.commit().await?;
+
     let (_, root_ca) = SslManager::init(secrets).await?.export_root_ca().await?;
     let setup_result = SetupResult {
         tor_address: format!("http://{}", tor_key.public().get_onion_address()),
         lan_address: format!(
             "https://embassy-{}.local",
-            crate::hostname::derive_id(&*ctx.product_key().await?)
+            crate::hostname::derive_id(&*product_key)
         ),
         root_ca: String::from_utf8(root_ca.to_pem()?)?,
     };
@@ -308,7 +357,7 @@ pub async fn execute_inner(
         )
         .await?,
     );
-    crate::disk::main::import(
+    let _ = crate::disk::main::import(
         &*guid,
         &ctx.datadir,
         RepairStrategy::Preen,
@@ -352,7 +401,7 @@ pub async fn execute_inner(
                 })
                 .await
             {
-                BEETHOVEN.play().await.unwrap_or_default(); // ignore error in playing the song
+                (&BEETHOVEN).play().await.unwrap_or_default(); // ignore error in playing the song
                 tracing::error!("Error recovering drive!: {}", e);
                 tracing::debug!("{:?}", e);
                 *ctx.recovery_status.write().await = Some(Err(e.into()));
@@ -451,7 +500,7 @@ async fn recover(
 
 async fn shasum(
     path: impl AsRef<Path>,
-) -> Result<GenericArray<u8, <Sha256 as Digest>::OutputSize>, Error> {
+) -> Result<GenericArray<u8, <Sha256 as OutputSizeUser>::OutputSize>, Error> {
     use tokio::io::AsyncReadExt;
 
     let mut rdr = tokio::fs::File::open(path).await?;

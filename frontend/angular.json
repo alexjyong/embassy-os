@@ -426,9 +426,9 @@
       }
     }
   },
-  "defaultProject": "ui",
   "cli": {
-    "defaultCollection": "@ionic/angular-toolkit"
+    "schematicCollections": ["@ionic/angular-toolkit"],
+    "analytics": false
   },
   "schematics": {
     "@ionic/angular-toolkit:component": {

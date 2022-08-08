@@ -16,7 +16,10 @@ export class ServerConfigService {
     private readonly embassyApi: ApiService,
   ) {}
 
-  async presentAlert(key: string, current?: any): Promise<HTMLIonAlertElement> {
+  async presentAlert(
+    key: string,
+    current?: any,
+  ): Promise<HTMLIonAlertElement | null> {
     const spec = serverConfig[key]
 
     let inputs: AlertInput[]
@@ -29,15 +32,13 @@ export class ServerConfigService {
         text: 'Save',
         handler: async (data: any) => {
           const loader = await this.loadingCtrl.create({
-            spinner: 'lines',
             message: 'Saving...',
-            cssClass: 'loader',
           })
           loader.present()
 
           try {
             await this.saveFns[key](data)
-          } catch (e) {
+          } catch (e: any) {
             this.errToast.present(e)
           } finally {
             loader.dismiss()
@@ -67,7 +68,7 @@ export class ServerConfigService {
         ]
         break
       default:
-        return
+        return null
     }
 
     const alert = await this.alertCtrl.create({
@@ -112,7 +113,7 @@ export const serverConfig: ConfigSpec = {
     type: 'boolean',
     name: 'Auto Check for Updates',
     description:
-      'If enabled, EmbassyOS will automatically check for updates of itself. Updating will still require your approval and action. Updates will never be performed automatically.',
+      'If enabled, EmbassyOS will automatically check for updates of itself and installed services. Updating will still require your approval and action. Updates will never be performed automatically.',
     default: true,
   },
 }

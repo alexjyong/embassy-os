@@ -7,8 +7,12 @@ import { Emver } from '../../services/emver.service'
 export class EmverSatisfiesPipe implements PipeTransform {
   constructor(private readonly emver: Emver) {}
 
-  transform(versionUnderTest: string, range: string): boolean {
-    return this.emver.satisfies(versionUnderTest, range)
+  transform(versionUnderTest?: string, range?: string): boolean {
+    return (
+      !!versionUnderTest &&
+      !!range &&
+      this.emver.satisfies(versionUnderTest, range)
+    )
   }
 }
 
@@ -27,6 +31,7 @@ export class EmverComparesPipe implements PipeTransform {
     }
   }
 }
+// left compared to right - if 1, version on left is higher; if 0, values the same; if -1, version on left is lower
 type SemverResult = 0 | 1 | -1 | 'comparison-impossible'
 
 @Pipe({

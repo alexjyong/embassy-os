@@ -23,10 +23,11 @@ import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 export class NotificationsPage {
   loading = true
   notifications: ServerNotifications = []
-  beforeCursor: number
+  beforeCursor?: number
   needInfinite = false
   fromToast = false
   readonly perPage = 40
+  readonly packageData$ = this.patch.watch$('package-data')
 
   constructor(
     private readonly embassyApi: ApiService,
@@ -35,7 +36,7 @@ export class NotificationsPage {
     private readonly modalCtrl: ModalController,
     private readonly errToast: ErrorToastService,
     private readonly route: ActivatedRoute,
-    public readonly patch: PatchDbService,
+    private readonly patch: PatchDbService,
   ) {}
 
   async ngOnInit() {
@@ -51,26 +52,28 @@ export class NotificationsPage {
   }
 
   async getNotifications(): Promise<ServerNotifications> {
-    let notifications: ServerNotifications = []
     try {
-      notifications = await this.embassyApi.getNotifications({
+      const notifications = await this.embassyApi.getNotifications({
         before: this.beforeCursor,
         limit: this.perPage,
       })
+
+      if (!notifications) return []
+
       this.beforeCursor = notifications[notifications.length - 1]?.id
       this.needInfinite = notifications.length >= this.perPage
-    } catch (e) {
-      this.errToast.present(e)
-    } finally {
+
       return notifications
+    } catch (e: any) {
+      this.errToast.present(e)
     }
+
+    return []
   }
 
   async delete(id: number, index: number): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Deleting...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -78,7 +81,7 @@ export class NotificationsPage {
       await this.embassyApi.deleteNotification({ id })
       this.notifications.splice(index, 1)
       this.beforeCursor = this.notifications[this.notifications.length - 1]?.id
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -97,10 +100,10 @@ export class NotificationsPage {
         },
         {
           text: 'Delete',
-          cssClass: 'enter-click',
           handler: () => {
             this.deleteAll()
           },
+          cssClass: 'enter-click',
         },
       ],
     })
@@ -118,11 +121,11 @@ export class NotificationsPage {
     await modal.present()
   }
 
-  async viewFullMessage(title: string, message: string) {
+  async viewFullMessage(header: string, message: string) {
     const alert = await this.alertCtrl.create({
-      header: title,
-      message: message,
-      cssClass: 'wider-alert',
+      header,
+      message,
+      cssClass: 'notification-detail-alert',
       buttons: [
         {
           text: `OK`,
@@ -157,19 +160,17 @@ export class NotificationsPage {
 
   private async deleteAll(): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Deleting...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       await this.embassyApi.deleteAllNotifications({
-        before: this.notifications[0].id,
+        before: this.notifications[0].id + 1,
       })
       this.notifications = []
       this.beforeCursor = undefined
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()

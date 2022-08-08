@@ -1,9 +1,11 @@
 import { Injectable } from '@angular/core'
-import { HttpService, Method } from '../http.service'
+import { HttpService, Log, LogsRes, Method } from '@start9labs/shared'
 import { ApiService } from './embassy-api.service'
 import { RR } from './api.types'
 import { parsePropertiesPermissive } from 'src/app/util/properties.util'
 import { ConfigService } from '../config.service'
+import { webSocket, WebSocketSubjectConfig } from 'rxjs/webSocket'
+import { Observable } from 'rxjs'
 
 @Injectable()
 export class LiveApiService extends ApiService {
@@ -12,13 +14,26 @@ export class LiveApiService extends ApiService {
     private readonly config: ConfigService,
   ) {
     super()
-    ;(window as any).rpcClient = this
+    ; (window as any).rpcClient = this
+  }
+
+  openLogsWebsocket$(config: WebSocketSubjectConfig<Log>): Observable<Log> {
+    return webSocket(config)
   }
 
   async getStatic(url: string): Promise<string> {
     return this.http.httpRequest({
       method: Method.GET,
       url,
+      responseType: 'text',
+    })
+  }
+
+  async uploadPackage(guid: string, body: ArrayBuffer): Promise<string> {
+    return this.http.httpRequest({
+      method: Method.POST,
+      body,
+      url: `/rest/rpc/${guid}`,
       responseType: 'text',
     })
   }
@@ -30,7 +45,7 @@ export class LiveApiService extends ApiService {
   }
 
   async getDump(): Promise<RR.GetDumpRes> {
-    return this.http.rpcRequest({ method: 'db.dump' })
+    return this.http.rpcRequest({ method: 'db.dump', params: {} })
   }
 
   async setDbValueRaw(params: RR.SetDBValueReq): Promise<RR.SetDBValueRes> {
@@ -69,6 +84,18 @@ export class LiveApiService extends ApiService {
     return this.http.rpcRequest({ method: 'server.kernel-logs', params })
   }
 
+  async followServerLogs(
+    params: RR.FollowServerLogsReq,
+  ): Promise<RR.FollowServerLogsRes> {
+    return this.http.rpcRequest({ method: 'server.logs.follow', params })
+  }
+
+  async followKernelLogs(
+    params: RR.FollowServerLogsReq,
+  ): Promise<RR.FollowServerLogsRes> {
+    return this.http.rpcRequest({ method: 'server.kernel-logs.follow', params })
+  }
+
   async getServerMetrics(
     params: RR.GetServerMetricsReq,
   ): Promise<RR.GetServerMetricsRes> {
@@ -99,10 +126,15 @@ export class LiveApiService extends ApiService {
     return this.http.rpcRequest({ method: 'server.rebuild', params })
   }
 
+  async repairDisk(params: RR.RestartServerReq): Promise<RR.RestartServerRes> {
+    return this.http.rpcRequest({ method: 'disk.repair', params })
+  }
+
   // marketplace URLs
 
-  async marketplaceProxy<T>(path: string, params: {}, url: string): Promise<T> {
-    const fullURL = `${url}${path}?${new URLSearchParams(params).toString()}`
+  async marketplaceProxy<T>(path: string, qp: {}, url: string): Promise<T> {
+    Object.assign(qp, { arch: this.config.targetArch })
+    const fullURL = `${url}${path}?${new URLSearchParams(qp).toString()}`
     return this.http.rpcRequest({
       method: 'marketplace.get',
       params: { url: fullURL },
@@ -238,6 +270,12 @@ export class LiveApiService extends ApiService {
     return this.http.rpcRequest({ method: 'package.logs', params })
   }
 
+  async followPackageLogs(
+    params: RR.FollowServerLogsReq,
+  ): Promise<RR.FollowServerLogsRes> {
+    return this.http.rpcRequest({ method: 'package.logs.follow', params })
+  }
+
   async getPkgMetrics(
     params: RR.GetPackageMetricsReq,
   ): Promise<RR.GetPackageMetricsRes> {
@@ -292,20 +330,14 @@ export class LiveApiService extends ApiService {
     return this.http.rpcRequest({ method: 'package.start', params })
   }
 
-  async dryStopPackage(
-    params: RR.DryStopPackageReq,
-  ): Promise<RR.DryStopPackageRes> {
-    return this.http.rpcRequest({ method: 'package.stop.dry', params })
+  async restartPackageRaw(
+    params: RR.RestartPackageReq,
+  ): Promise<RR.RestartPackageRes> {
+    return this.http.rpcRequest({ method: 'package.restart', params })
   }
 
   async stopPackageRaw(params: RR.StopPackageReq): Promise<RR.StopPackageRes> {
     return this.http.rpcRequest({ method: 'package.stop', params })
-  }
-
-  async dryUninstallPackage(
-    params: RR.DryUninstallPackageReq,
-  ): Promise<RR.DryUninstallPackageRes> {
-    return this.http.rpcRequest({ method: 'package.uninstall.dry', params })
   }
 
   async deleteRecoveredPackageRaw(
@@ -325,6 +357,15 @@ export class LiveApiService extends ApiService {
   ): Promise<RR.DryConfigureDependencyRes> {
     return this.http.rpcRequest({
       method: 'package.dependency.configure.dry',
+      params,
+    })
+  }
+
+  async sideloadPackage(
+    params: RR.SideloadPackageReq,
+  ): Promise<RR.SideloadPacakgeRes> {
+    return this.http.rpcRequest({
+      method: 'package.sideload',
       params,
     })
   }

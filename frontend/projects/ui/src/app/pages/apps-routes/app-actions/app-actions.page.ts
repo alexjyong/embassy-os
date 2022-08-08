@@ -1,9 +1,8 @@
-import { Component, Input, ViewChild } from '@angular/core'
+import { Component, Input } from '@angular/core'
 import { ActivatedRoute } from '@angular/router'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
 import {
   AlertController,
-  IonContent,
   LoadingController,
   ModalController,
   NavController,
@@ -14,12 +13,10 @@ import {
   PackageDataEntry,
   PackageMainStatus,
 } from 'src/app/services/patch-db/data-model'
-import { wizardModal } from 'src/app/components/install-wizard/install-wizard.component'
-import { WizardBaker } from 'src/app/components/install-wizard/prebaked-wizards'
-import { Subscription } from 'rxjs'
 import { GenericFormPage } from 'src/app/modals/generic-form/generic-form.page'
-import { isEmptyObject, ErrorToastService } from '@start9labs/shared'
+import { isEmptyObject, ErrorToastService, getPkgId } from '@start9labs/shared'
 import { ActionSuccessPage } from 'src/app/modals/action-success/action-success.page'
+import { hasCurrentDeps } from 'src/app/util/has-deps'
 
 @Component({
   selector: 'app-actions',
@@ -27,10 +24,8 @@ import { ActionSuccessPage } from 'src/app/modals/action-success/action-success.
   styleUrls: ['./app-actions.page.scss'],
 })
 export class AppActionsPage {
-  @ViewChild(IonContent) content: IonContent
-  pkgId: string
-  pkg: PackageDataEntry
-  subs: Subscription[]
+  readonly pkgId = getPkgId(this.route)
+  readonly pkg$ = this.patch.watch$('package-data', this.pkgId)
 
   constructor(
     private readonly route: ActivatedRoute,
@@ -39,36 +34,22 @@ export class AppActionsPage {
     private readonly alertCtrl: AlertController,
     private readonly errToast: ErrorToastService,
     private readonly loadingCtrl: LoadingController,
-    private readonly wizardBaker: WizardBaker,
     private readonly navCtrl: NavController,
     private readonly patch: PatchDbService,
   ) {}
 
-  ngOnInit() {
-    this.pkgId = this.route.snapshot.paramMap.get('pkgId')
-    this.subs = [
-      this.patch.watch$('package-data', this.pkgId).subscribe(pkg => {
-        this.pkg = pkg
-      }),
-    ]
-  }
-
-  ngAfterViewInit() {
-    this.content.scrollToPoint(undefined, 1)
-  }
-
-  ngOnDestroy() {
-    this.subs.forEach(sub => sub.unsubscribe())
-  }
-
-  async handleAction(action: { key: string; value: Action }) {
-    const status = this.pkg.installed.status
+  async handleAction(
+    pkg: PackageDataEntry,
+    action: { key: string; value: Action },
+  ) {
+    const status = pkg.installed?.status
     if (
+      status &&
       (action.value['allowed-statuses'] as PackageMainStatus[]).includes(
         status.main.status,
       )
     ) {
-      if (!isEmptyObject(action.value['input-spec'])) {
+      if (!isEmptyObject(action.value['input-spec'] || {})) {
         const modal = await this.modalCtrl.create({
           component: GenericFormPage,
           componentProps: {
@@ -102,7 +83,7 @@ export class AppActionsPage {
               handler: () => {
                 this.executeAction(action.key)
               },
-              cssClass: 'wide-alert enter-click',
+              cssClass: 'enter-click',
             },
           ],
         })
@@ -112,7 +93,7 @@ export class AppActionsPage {
       const statuses = [...action.value['allowed-statuses']]
       const last = statuses.pop()
       let statusesStr = statuses.join(', ')
-      let error = null
+      let error = ''
       if (statuses.length) {
         if (statuses.length > 1) {
           // oxford comma
@@ -136,20 +117,53 @@ export class AppActionsPage {
     }
   }
 
-  async uninstall() {
-    const { id, title, version, alerts } = this.pkg.manifest
-    const data = await wizardModal(
-      this.modalCtrl,
-      this.wizardBaker.uninstall({
-        id,
-        title,
-        version,
-        uninstallAlert: alerts.uninstall,
-      }),
-    )
+  async tryUninstall(pkg: PackageDataEntry): Promise<void> {
+    const { title, alerts } = pkg.manifest
 
-    if (data.cancelled) return
-    return this.navCtrl.navigateRoot('/services')
+    let message =
+      alerts.uninstall ||
+      `Uninstalling ${title} will permanently delete its data`
+
+    if (hasCurrentDeps(pkg)) {
+      message = `${message}. Services that depend on ${title} will no longer work properly and may crash`
+    }
+
+    const alert = await this.alertCtrl.create({
+      header: 'Warning',
+      message,
+      buttons: [
+        {
+          text: 'Cancel',
+          role: 'cancel',
+        },
+        {
+          text: 'Uninstall',
+          handler: () => {
+            this.uninstall()
+          },
+          cssClass: 'enter-click',
+        },
+      ],
+      cssClass: 'alert-warning-message',
+    })
+
+    await alert.present()
+  }
+
+  private async uninstall() {
+    const loader = await this.loadingCtrl.create({
+      message: `Beginning uninstall...`,
+    })
+    await loader.present()
+
+    try {
+      await this.embassyApi.uninstallPackage({ id: this.pkgId })
+      this.navCtrl.navigateRoot('/services')
+    } catch (e: any) {
+      this.errToast.present(e)
+    } finally {
+      loader.dismiss()
+    }
   }
 
   private async executeAction(
@@ -157,9 +171,7 @@ export class AppActionsPage {
     input?: object,
   ): Promise<boolean> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Executing action...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -178,7 +190,8 @@ export class AppActionsPage {
       })
 
       setTimeout(() => successModal.present(), 400)
-    } catch (e) {
+      return true
+    } catch (e: any) {
       this.errToast.present(e)
       return false
     } finally {
@@ -203,5 +216,5 @@ interface LocalAction {
   styleUrls: ['./app-actions.page.scss'],
 })
 export class AppActionsItemComponent {
-  @Input() action: LocalAction
+  @Input() action!: LocalAction
 }

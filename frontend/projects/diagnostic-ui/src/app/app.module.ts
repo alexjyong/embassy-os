@@ -9,13 +9,12 @@ import { ApiService } from './services/api/api.service'
 import { MockApiService } from './services/api/mock-api.service'
 import { LiveApiService } from './services/api/live-api.service'
 import { GlobalErrorHandler } from './services/global-error-handler.service'
-import { AbstractApiService, WorkspaceConfig } from '@start9labs/shared'
+import { WorkspaceConfig } from '@start9labs/shared'
 
 const { useMocks } = require('../../../../config.json') as WorkspaceConfig
 
 @NgModule({
   declarations: [AppComponent],
-  entryComponents: [],
   imports: [
     HttpClientModule,
     BrowserModule,
@@ -29,10 +28,6 @@ const { useMocks } = require('../../../../config.json') as WorkspaceConfig
     {
       provide: ApiService,
       useClass: useMocks ? MockApiService : LiveApiService,
-    },
-    {
-      provide: AbstractApiService,
-      useExisting: ApiService,
     },
     { provide: ErrorHandler, useClass: GlobalErrorHandler },
   ],

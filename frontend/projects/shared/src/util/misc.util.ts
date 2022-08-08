@@ -14,25 +14,38 @@ export function capitalizeFirstLetter(string: string): string {
   return string.charAt(0).toUpperCase() + string.slice(1)
 }
 
-export const exists = (t: any) => {
+export function exists<T>(t: T | undefined): t is T {
   return t !== undefined
 }
 
 export function debounce(delay: number = 300): MethodDecorator {
   return function (
     target: any,
-    propertyKey: string,
+    propertyKey: string | symbol,
     descriptor: PropertyDescriptor,
   ) {
     const timeoutKey = Symbol()
 
     const original = descriptor.value
 
-    descriptor.value = function (...args) {
+    descriptor.value = function (this: any, ...args: any[]) {
       clearTimeout(this[timeoutKey])
       this[timeoutKey] = setTimeout(() => original.apply(this, args), delay)
     }
 
     return descriptor
+  }
+}
+
+export function removeTrailingSlash(word: string): string {
+  return word.replace(/\/+$/, '')
+}
+
+export function isValidHttpUrl(string: string): boolean {
+  try {
+    const _ = new URL(string)
+    return true
+  } catch (_) {
+    return false
   }
 }

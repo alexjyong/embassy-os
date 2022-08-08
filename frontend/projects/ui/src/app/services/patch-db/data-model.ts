@@ -2,8 +2,6 @@ import { ConfigSpec } from 'src/app/pkg-config/config-types'
 import { Url } from '@start9labs/shared'
 import { MarketplaceManifest } from '@start9labs/marketplace'
 import { BasicInfo } from 'src/app/pages/developer-routes/developer-menu/form-info'
-import { PackageState } from 'src/app/types/package-state'
-import { InstallProgress } from 'src/app/types/install-progress'
 
 export interface DataModel {
   'server-info': ServerInfo
@@ -17,15 +15,13 @@ export interface UIData {
   'auto-check-updates': boolean
   'pkg-order': string[]
   'ack-welcome': string // EOS version
-  marketplace: UIMarketplaceData
-  dev: DevData
-  gaming:
-    | {
-        snake: {
-          'high-score': number
-        }
-      }
-    | undefined
+  marketplace?: UIMarketplaceData
+  dev?: DevData
+  gaming?: {
+    snake: {
+      'high-score': number
+    }
+  }
 }
 
 export interface UIMarketplaceData {
@@ -56,13 +52,19 @@ export interface ServerInfo {
   'lan-address': Url
   'tor-address': Url
   'unread-notification-count': number
-  'status-info': {
-    'backing-up': boolean
-    updated: boolean
-    'update-progress': { size: number | null; downloaded: number } | null
-  }
+  'status-info': ServerStatusInfo
   'eos-version-compat': string
   'password-hash': string
+}
+
+export interface ServerStatusInfo {
+  'backup-progress': null | {
+    [packageId: string]: {
+      complete: boolean
+    }
+  }
+  updated: boolean
+  'update-progress': { size: number | null; downloaded: number } | null
 }
 
 export enum ServerStatus {
@@ -86,6 +88,14 @@ export interface PackageDataEntry {
   manifest: Manifest
   installed?: InstalledPackageDataEntry // exists when: installed, updating
   'install-progress'?: InstallProgress // exists when: installing, updating
+}
+
+export enum PackageState {
+  Installing = 'installing',
+  Installed = 'installed',
+  Updating = 'updating',
+  Removing = 'removing',
+  Restoring = 'restoring',
 }
 
 export interface InstalledPackageDataEntry {
@@ -113,7 +123,15 @@ export interface CurrentDependencyInfo {
   'health-checks': string[] // array of health check IDs
 }
 
-export interface Manifest extends MarketplaceManifest<DependencyConfig> {
+export interface Manifest extends MarketplaceManifest<DependencyConfig | null> {
+  assets: {
+    license: string // filename
+    instructions: string // filename
+    icon: string // filename
+    docker_images: string // filename
+    assets: string // path to assets folder
+    scripts: string // path to scripts folder
+  }
   main: ActionImpl
   'health-checks': Record<
     string,
@@ -124,7 +142,7 @@ export interface Manifest extends MarketplaceManifest<DependencyConfig> {
   'min-os-version': string
   interfaces: Record<string, InterfaceDef>
   backup: BackupActions
-  migrations: Migrations
+  migrations: Migrations | null
   actions: Record<string, Action>
   permissions: any // @TODO 0.3.1
 }
@@ -155,8 +173,8 @@ export enum DockerIoFormat {
 }
 
 export interface ConfigActions {
-  get: ActionImpl
-  set: ActionImpl
+  get: ActionImpl | null
+  set: ActionImpl | null
 }
 
 export type Volume = VolumeData
@@ -229,7 +247,7 @@ export interface Action {
   warning: string | null
   implementation: ActionImpl
   'allowed-statuses': (PackageMainStatus.Stopped | PackageMainStatus.Running)[]
-  'input-spec': ConfigSpec
+  'input-spec': ConfigSpec | null
 }
 
 export interface Status {
@@ -244,6 +262,7 @@ export type MainStatus =
   | MainStatusStarting
   | MainStatusRunning
   | MainStatusBackingUp
+  | MainStatusRestarting
 
 export interface MainStatusStopped {
   status: PackageMainStatus.Stopped
@@ -255,6 +274,7 @@ export interface MainStatusStopping {
 
 export interface MainStatusStarting {
   status: PackageMainStatus.Starting
+  restarting: boolean
 }
 
 export interface MainStatusRunning {
@@ -268,12 +288,17 @@ export interface MainStatusBackingUp {
   started: string | null // UTC date string
 }
 
+export interface MainStatusRestarting {
+  status: PackageMainStatus.Restarting
+}
+
 export enum PackageMainStatus {
   Starting = 'starting',
   Running = 'running',
   Stopping = 'stopping',
   Stopped = 'stopped',
   BackingUp = 'backing-up',
+  Restarting = 'restarting',
 }
 
 export type HealthCheckResult =
@@ -357,4 +382,14 @@ export interface DependencyErrorHealthChecksFailed {
 
 export interface DependencyErrorTransitive {
   type: DependencyErrorType.Transitive
+}
+
+export interface InstallProgress {
+  readonly size: number | null
+  readonly downloaded: number
+  readonly 'download-complete': boolean
+  readonly validated: number
+  readonly 'validation-complete': boolean
+  readonly unpacked: number
+  readonly 'unpack-complete': boolean
 }

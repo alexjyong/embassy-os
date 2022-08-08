@@ -1,5 +1,6 @@
 import { Component } from '@angular/core'
 import { ConfigService } from 'src/app/services/config.service'
+import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
 
 @Component({
   selector: 'lan',
@@ -7,20 +8,15 @@ import { ConfigService } from 'src/app/services/config.service'
   styleUrls: ['./lan.page.scss'],
 })
 export class LANPage {
-  lanAddress: string
-  lanDisabled: string
+  readonly downloadIsDisabled = !this.config.isTor()
+  readonly server$ = this.patch.watch$('server-info')
 
-  constructor (
+  constructor(
     private readonly config: ConfigService,
-  ) { }
+    private readonly patch: PatchDbService,
+  ) {}
 
-  ngOnInit () {
-    if (!this.config.isTor()) {
-      this.lanDisabled = 'For security reasons, you must setup LAN over a Tor connection. Please navigate to your Embassy Tor Address and try again.'
-    }
-  }
-
-  installCert (): void {
-    document.getElementById('install-cert').click()
+  installCert(): void {
+    document.getElementById('install-cert')?.click()
   }
 }

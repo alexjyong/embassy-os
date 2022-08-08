@@ -1,25 +1,30 @@
-import { Inject, Injectable, InjectionToken } from '@angular/core'
+import { Inject, Injectable } from '@angular/core'
 import { Storage } from '@ionic/storage-angular'
 import { Bootstrapper, PatchDB, Source, Store } from 'patch-db-client'
-import { BehaviorSubject, Observable, of, Subscription } from 'rxjs'
+import {
+  BehaviorSubject,
+  Observable,
+  of,
+  ReplaySubject,
+  Subscription,
+} from 'rxjs'
 import {
   catchError,
   debounceTime,
+  filter,
   finalize,
   mergeMap,
+  shareReplay,
+  switchMap,
+  take,
   tap,
   withLatestFrom,
 } from 'rxjs/operators'
-import { isEmptyObject, pauseFor } from '@start9labs/shared'
+import { pauseFor } from '@start9labs/shared'
 import { DataModel } from './data-model'
 import { ApiService } from '../api/embassy-api.service'
 import { AuthService } from '../auth.service'
-
-export const PATCH_HTTP = new InjectionToken<Source<DataModel>>('')
-export const PATCH_SOURCE = new InjectionToken<Source<DataModel>>('')
-export const BOOTSTRAPPER = new InjectionToken<Bootstrapper<DataModel>>('')
-export const AUTH = new InjectionToken<AuthService>('')
-export const STORAGE = new InjectionToken<Storage>('')
+import { BOOTSTRAPPER, PATCH_SOURCE, PATCH_SOURCE$ } from './patch-db.factory'
 
 export enum PatchConnection {
   Initializing = 'initializing',
@@ -32,52 +37,37 @@ export enum PatchConnection {
 })
 export class PatchDbService {
   private readonly WS_SUCCESS = 'wsSuccess'
-  private patchConnection$ = new BehaviorSubject(PatchConnection.Initializing)
-  private wsSuccess$ = new BehaviorSubject(false)
-  private polling$ = new BehaviorSubject(false)
-  private patchDb: PatchDB<DataModel>
+  private readonly patchConnection$ = new ReplaySubject<PatchConnection>(1)
+  private readonly wsSuccess$ = new BehaviorSubject(false)
+  private readonly polling$ = new BehaviorSubject(false)
   private subs: Subscription[] = []
-  private sources$: BehaviorSubject<Source<DataModel>[]> = new BehaviorSubject([
-    this.wsSource,
-  ])
 
-  data: DataModel
-  errors = 0
-
-  getData() {
-    return this.patchDb.store.cache.data
-  }
-
-  // TODO: Refactor to use `Observable` so that we can react to PatchDb becoming loaded
-  get loaded(): boolean {
-    return (
-      this.patchDb?.store?.cache?.data &&
-      !isEmptyObject(this.patchDb.store.cache.data)
-    )
-  }
+  readonly connected$ = this.watchPatchConnection$().pipe(
+    filter(status => status === PatchConnection.Connected),
+    take(1),
+    shareReplay(),
+  )
 
   constructor(
-    @Inject(PATCH_SOURCE) private readonly wsSource: Source<DataModel>,
-    @Inject(PATCH_SOURCE) private readonly pollSource: Source<DataModel>,
-    @Inject(PATCH_HTTP) private readonly http: ApiService,
+    // [wsSources, pollSources]
+    @Inject(PATCH_SOURCE) private readonly sources: Source<DataModel>[],
     @Inject(BOOTSTRAPPER)
     private readonly bootstrapper: Bootstrapper<DataModel>,
-    @Inject(AUTH) private readonly auth: AuthService,
-    @Inject(STORAGE) private readonly storage: Storage,
+    @Inject(PATCH_SOURCE$)
+    private readonly sources$: BehaviorSubject<Source<DataModel>[]>,
+    private readonly http: ApiService,
+    private readonly auth: AuthService,
+    private readonly storage: Storage,
+    private readonly patchDb: PatchDB<DataModel>,
   ) {}
 
-  async init(): Promise<void> {
-    const cache = await this.bootstrapper.init()
-    this.sources$.next([this.wsSource, this.http])
-
-    this.patchDb = new PatchDB(this.sources$, this.http, cache)
-
+  init() {
+    this.sources$.next([this.sources[0], this.http])
     this.patchConnection$.next(PatchConnection.Initializing)
-    this.data = this.patchDb.store.cache.data
   }
 
   async start(): Promise<void> {
-    await this.init()
+    this.init()
 
     this.subs.push(
       // Connection Error
@@ -90,13 +80,13 @@ export class PatchDbService {
               console.log('patchDB: POLLING FAILED', e)
               this.patchConnection$.next(PatchConnection.Disconnected)
               await pauseFor(2000)
-              this.sources$.next([this.pollSource, this.http])
+              this.sources$.next([this.sources[1], this.http])
               return
             }
 
             console.log('patchDB: WEBSOCKET FAILED', e)
             this.polling$.next(true)
-            this.sources$.next([this.pollSource, this.http])
+            this.sources$.next([this.sources[1], this.http])
           }),
         )
         .subscribe({
@@ -148,7 +138,7 @@ export class PatchDbService {
               console.log('patchDB: SWITCHING BACK TO WEBSOCKETS')
               this.patchConnection$.next(PatchConnection.Initializing)
               this.polling$.next(false)
-              this.sources$.next([this.wsSource, this.http])
+              this.sources$.next([this.sources[0], this.http])
             }
           }),
         )
@@ -161,11 +151,9 @@ export class PatchDbService {
   }
 
   stop(): void {
-    if (this.patchDb) {
-      console.log('patchDB: STOPPING')
-      this.patchConnection$.next(PatchConnection.Initializing)
-      this.patchDb.store.reset()
-    }
+    console.log('patchDB: STOPPING')
+    this.patchConnection$.next(PatchConnection.Initializing)
+    this.patchDb.store.reset()
     this.subs.forEach(x => x.unsubscribe())
     this.subs = []
   }
@@ -177,8 +165,13 @@ export class PatchDbService {
   // prettier-ignore
   watch$: Store<DataModel>['watch$'] = (...args: (string | number)[]): Observable<DataModel> => {
     const argsString = '/' + args.join('/')
+
     console.log('patchDB: WATCHING ', argsString)
-    return this.patchDb.store.watch$(...(args as [])).pipe(
+
+    return this.patchConnection$.pipe(
+      filter(status => status === PatchConnection.Connected),
+      take(1),
+      switchMap(() => this.patchDb.store.watch$(...(args as []))),
       tap(data => console.log('patchDB: NEW VALUE', argsString, data)),
       catchError(e => {
         console.error('patchDB: WATCH ERROR', e)

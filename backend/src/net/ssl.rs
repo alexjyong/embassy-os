@@ -12,10 +12,12 @@ use openssl::pkey::{PKey, Private};
 use openssl::x509::{X509Builder, X509Extension, X509NameBuilder, X509};
 use openssl::*;
 use sqlx::SqlitePool;
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::instrument;
 
 use crate::s9pk::manifest::PackageId;
+use crate::util::Invoke;
 use crate::{Error, ErrorKind, ResultExt};
 
 static CERTIFICATE_VERSION: i32 = 2; // X509 version 3 is actually encoded as '2' in the cert because fuck you.
@@ -164,7 +166,8 @@ impl SslManager {
         let (root_key, root_cert) = match store.load_root_certificate().await? {
             None => {
                 let root_key = generate_key()?;
-                let root_cert = make_root_cert(&root_key)?;
+                let server_id = crate::hostname::get_id().await?;
+                let root_cert = make_root_cert(&root_key, &server_id)?;
                 store.save_root_certificate(&root_key, &root_cert).await?;
                 Ok::<_, Error>((root_key, root_cert))
             }
@@ -179,6 +182,17 @@ impl SslManager {
         )
         .await?;
         tokio::fs::write(ROOT_CA_STATIC_PATH, root_cert.to_pem()?).await?;
+
+        // write to ca cert store
+        tokio::fs::write(
+            "/usr/local/share/ca-certificates/embassy-root-ca.crt",
+            root_cert.to_pem()?,
+        )
+        .await?;
+        Command::new("update-ca-certificates")
+            .invoke(crate::ErrorKind::OpenSsl)
+            .await?;
+
         let (int_key, int_cert) = match store.load_intermediate_certificate().await? {
             None => {
                 let int_key = generate_key()?;
@@ -307,7 +321,7 @@ fn generate_key() -> Result<PKey<Private>, Error> {
     Ok(key)
 }
 #[instrument]
-fn make_root_cert(root_key: &PKey<Private>) -> Result<X509, Error> {
+fn make_root_cert(root_key: &PKey<Private>, server_id: &str) -> Result<X509, Error> {
     let mut builder = X509Builder::new()?;
     builder.set_version(CERTIFICATE_VERSION)?;
 
@@ -320,7 +334,8 @@ fn make_root_cert(root_key: &PKey<Private>) -> Result<X509, Error> {
     builder.set_serial_number(&*rand_serial()?)?;
 
     let mut subject_name_builder = X509NameBuilder::new()?;
-    subject_name_builder.append_entry_by_text("CN", "Embassy Local Root CA")?;
+    subject_name_builder
+        .append_entry_by_text("CN", &format!("Embassy Local Root CA ({})", server_id))?;
     subject_name_builder.append_entry_by_text("O", "Start9")?;
     subject_name_builder.append_entry_by_text("OU", "Embassy")?;
     let subject_name = subject_name_builder.build();

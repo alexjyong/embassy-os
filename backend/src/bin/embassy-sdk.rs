@@ -6,21 +6,25 @@ use rpc_toolkit::run_cli;
 use rpc_toolkit::yajrc::RpcError;
 use serde_json::Value;
 
+lazy_static::lazy_static! {
+    static ref VERSION_STRING: String = Current::new().semver().to_string();
+}
+
 fn inner_main() -> Result<(), Error> {
     run_cli!({
         command: embassy::portable_api,
         app: app => app
             .name("Embassy SDK")
-            .version(Current::new().semver().to_string().as_str())
+            .version(&**VERSION_STRING)
             .arg(
                 clap::Arg::with_name("config")
-                    .short("c")
+                    .short('c')
                     .long("config")
                     .takes_value(true),
             ),
         context: matches => {
             if let Err(_) = std::env::var("RUST_LOG") {
-                std::env::set_var("RUST_LOG", "embassy=warn");
+                std::env::set_var("RUST_LOG", "embassy=warn,js_engine=warn");
             }
             EmbassyLogger::init();
             SdkContext::init(matches)?

@@ -17,17 +17,19 @@ import { ApiService } from 'src/app/services/api/embassy-api.service'
 import { ErrorToastService } from '@start9labs/shared'
 import { MappedBackupTarget } from 'src/app/types/mapped-backup-target'
 
+type BackupType = 'create' | 'restore'
+
 @Component({
   selector: 'backup-drives',
   templateUrl: './backup-drives.component.html',
   styleUrls: ['./backup-drives.component.scss'],
 })
 export class BackupDrivesComponent {
-  @Input() type: 'create' | 'restore'
+  @Input() type!: BackupType
   @Output() onSelect: EventEmitter<
     MappedBackupTarget<CifsBackupTarget | DiskBackupTarget>
   > = new EventEmitter()
-  loadingText: string
+  loadingText = ''
 
   constructor(
     private readonly loadingCtrl: LoadingController,
@@ -36,8 +38,24 @@ export class BackupDrivesComponent {
     private readonly modalCtrl: ModalController,
     private readonly embassyApi: ApiService,
     private readonly errToast: ErrorToastService,
-    public readonly backupService: BackupService,
+    private readonly backupService: BackupService,
   ) {}
+
+  get loading() {
+    return this.backupService.loading
+  }
+
+  get loadingError() {
+    return this.backupService.loadingError
+  }
+
+  get drives() {
+    return this.backupService.drives
+  }
+
+  get cifs() {
+    return this.backupService.cifs
+  }
 
   ngOnInit() {
     this.loadingText =
@@ -89,9 +107,12 @@ export class BackupDrivesComponent {
   }
 
   async presentActionCifs(
+    event: Event,
     target: MappedBackupTarget<CifsBackupTarget>,
     index: number,
   ): Promise<void> {
+    event.stopPropagation()
+
     const entry = target.entry as CifsBackupTarget
 
     const action = await this.actionCtrl.create({
@@ -114,17 +135,6 @@ export class BackupDrivesComponent {
             this.presentModalEditCifs(target.id, entry, index)
           },
         },
-        {
-          text:
-            this.type === 'create' ? 'Create Backup' : 'Restore From Backup',
-          icon:
-            this.type === 'create'
-              ? 'cloud-upload-outline'
-              : 'cloud-download-outline',
-          handler: () => {
-            this.select(target)
-          },
-        },
       ],
     })
 
@@ -142,9 +152,7 @@ export class BackupDrivesComponent {
 
   private async addCifs(value: RR.AddBackupTargetReq): Promise<boolean> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Testing connectivity to shared folder...',
-      cssClass: 'loader',
     })
     await loader.present()
 
@@ -157,7 +165,7 @@ export class BackupDrivesComponent {
         entry,
       })
       return true
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
       return false
     } finally {
@@ -201,17 +209,14 @@ export class BackupDrivesComponent {
     index: number,
   ): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Testing connectivity to shared folder...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       const res = await this.embassyApi.updateBackupTarget(value)
-      const entry = Object.values(res)[0]
-      this.backupService.cifs[index].entry = entry
-    } catch (e) {
+      this.backupService.cifs[index].entry = Object.values(res)[0]
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -220,16 +225,14 @@ export class BackupDrivesComponent {
 
   private async deleteCifs(id: string, index: number): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      spinner: 'lines',
       message: 'Removing...',
-      cssClass: 'loader',
     })
     await loader.present()
 
     try {
       await this.embassyApi.removeBackupTarget({ id })
       this.backupService.cifs.splice(index, 1)
-    } catch (e) {
+    } catch (e: any) {
       this.errToast.present(e)
     } finally {
       loader.dismiss()
@@ -247,10 +250,14 @@ export class BackupDrivesComponent {
   styleUrls: ['./backup-drives.component.scss'],
 })
 export class BackupDrivesHeaderComponent {
-  @Input() title: string
+  @Input() type!: BackupType
   @Output() onClose: EventEmitter<void> = new EventEmitter()
 
-  constructor(public readonly backupService: BackupService) {}
+  constructor(private readonly backupService: BackupService) {}
+
+  get loading() {
+    return this.backupService.loading
+  }
 
   refresh() {
     this.backupService.getBackupTargets()
@@ -263,8 +270,8 @@ export class BackupDrivesHeaderComponent {
   styleUrls: ['./backup-drives.component.scss'],
 })
 export class BackupDrivesStatusComponent {
-  @Input() type: string
-  @Input() hasValidBackup: boolean
+  @Input() type!: BackupType
+  @Input() hasValidBackup!: boolean
 }
 
 const CifsSpec: ConfigSpec = {

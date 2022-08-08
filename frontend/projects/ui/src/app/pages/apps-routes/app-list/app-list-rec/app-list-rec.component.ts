@@ -26,7 +26,7 @@ export class AppListRecComponent {
   readonly delete$ = new Subject<RecoveredInfo>()
 
   @Input()
-  rec: RecoveredInfo
+  rec!: RecoveredInfo
 
   @Output()
   readonly deleted = new EventEmitter<void>()
@@ -35,14 +35,17 @@ export class AppListRecComponent {
   readonly installing$ = this.install$.pipe(
     switchMap(({ id, version }) =>
       // Mapping each installation to API request
-      this.marketplaceService.installPackage({
-        id,
-        'version-spec': `>=${version}`,
-        'version-priority': 'min',
-      }),
+      this.marketplaceService
+        .installPackage({
+          id,
+          'version-spec': `>=${version}`,
+          'version-priority': 'min',
+        })
+        .pipe(
+          // Mapping operation to true/false loading indication
+          loading(this.errToast),
+        ),
     ),
-    // Mapping operation to true/false loading indication
-    loading(this.errToast),
   )
 
   // Deleting package
@@ -99,7 +102,7 @@ function loading(
   return pipe(
     // Show notification on error
     catchError(e => from(errToast.present(e))),
-    // Map any result to false to stop loading inidicator
+    // Map any result to false to stop loading indicator
     mapTo(false),
     // Start operation with true
     startWith(true),

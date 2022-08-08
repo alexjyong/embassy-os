@@ -27,6 +27,7 @@ use crate::disk::mount::guard::TmpMountGuard;
 use crate::install::progress::InstallProgress;
 use crate::install::{download_install_s9pk, PKG_PUBLIC_DIR};
 use crate::net::ssl::SslManager;
+use crate::notifications::NotificationLevel;
 use crate::s9pk::manifest::{Manifest, PackageId};
 use crate::s9pk::reader::S9pkReader;
 use crate::setup::RecoveryStatus;
@@ -34,43 +35,79 @@ use crate::util::display_none;
 use crate::util::io::dir_size;
 use crate::util::serde::IoFormat;
 use crate::volume::{backup_dir, BACKUP_DIR, PKG_VOLUME_DIR};
-use crate::{auth::check_password_against_db, notifications::NotificationLevel};
 use crate::{Error, ResultExt};
 
-fn parse_comma_separated(arg: &str, _: &ArgMatches<'_>) -> Result<Vec<PackageId>, Error> {
+fn parse_comma_separated(arg: &str, _: &ArgMatches) -> Result<Vec<PackageId>, Error> {
     arg.split(',')
         .map(|s| s.trim().parse().map_err(Error::from))
         .collect()
 }
 
 #[command(rename = "restore", display(display_none))]
-#[instrument(skip(ctx, old_password, password))]
+#[instrument(skip(ctx, password))]
 pub async fn restore_packages_rpc(
     #[context] ctx: RpcContext,
     #[arg(parse(parse_comma_separated))] ids: Vec<PackageId>,
     #[arg(rename = "target-id")] target_id: BackupTargetId,
-    #[arg(rename = "old-password", long = "old-password")] old_password: Option<String>,
     #[arg] password: String,
 ) -> Result<WithRevision<()>, Error> {
     let mut db = ctx.db.handle();
-    check_password_against_db(&mut ctx.secret_store.acquire().await?, &password).await?;
     let fs = target_id
         .load(&mut ctx.secret_store.acquire().await?)
         .await?;
-    let mut backup_guard = BackupMountGuard::mount(
-        TmpMountGuard::mount(&fs, ReadOnly).await?,
-        old_password.as_ref().unwrap_or(&password),
-    )
-    .await?;
-    if old_password.is_some() {
-        backup_guard.change_password(&password)?;
-    }
+    let backup_guard =
+        BackupMountGuard::mount(TmpMountGuard::mount(&fs, ReadOnly).await?, &password).await?;
 
     let (revision, backup_guard, tasks, _) =
         restore_packages(&ctx, &mut db, backup_guard, ids).await?;
 
-    tokio::spawn(async {
-        futures::future::join_all(tasks).await;
+    tokio::spawn(async move {
+        let res = futures::future::join_all(tasks).await;
+        for res in res {
+            match res.with_kind(crate::ErrorKind::Unknown) {
+                Ok((Ok(_), _)) => (),
+                Ok((Err(err), package_id)) => {
+                    if let Err(err) = ctx
+                        .notification_manager
+                        .notify(
+                            &mut db,
+                            Some(package_id.clone()),
+                            NotificationLevel::Error,
+                            "Restoration Failure".to_string(),
+                            format!("Error restoring package {}: {}", package_id, err),
+                            (),
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!("Failed to notify: {}", err);
+                        tracing::debug!("{:?}", err);
+                    };
+                    tracing::error!("Error restoring package {}: {}", package_id, err);
+                    tracing::debug!("{:?}", err);
+                }
+                Err(e) => {
+                    if let Err(err) = ctx
+                        .notification_manager
+                        .notify(
+                            &mut db,
+                            None,
+                            NotificationLevel::Error,
+                            "Restoration Failure".to_string(),
+                            format!("Error during restoration: {}", e),
+                            (),
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!("Failed to notify: {}", err);
+                        tracing::debug!("{:?}", err);
+                    }
+                    tracing::error!("Error restoring packages: {}", e);
+                    tracing::debug!("{:?}", e);
+                }
+            }
+        }
         if let Err(e) = backup_guard.unmount().await {
             tracing::error!("Error unmounting backup drive: {}", e);
             tracing::debug!("{:?}", e);
@@ -230,7 +267,7 @@ pub async fn recover_full_embassy(
                                 if let Err(err) = rpc_ctx.notification_manager.notify(
                                     &mut db,
                                     Some(package_id.clone()),
-                                    NotificationLevel::Error, 
+                                    NotificationLevel::Error,
                                     "Restoration Failure".to_string(), format!("Error restoring package {}: {}", package_id,err), (), None).await{
                                     tracing::error!("Failed to notify: {}", err);
                                     tracing::debug!("{:?}", err);
@@ -242,8 +279,8 @@ pub async fn recover_full_embassy(
                                 if let Err(err) = rpc_ctx.notification_manager.notify(
                                     &mut db,
                                     None,
-                                    NotificationLevel::Error, 
-                                    "Restoration Failure".to_string(), format!("Error restoring ?: {}", e), (), None).await {
+                                    NotificationLevel::Error,
+                                    "Restoration Failure".to_string(), format!("Error during restoration: {}", e), (), None).await {
 
                                     tracing::error!("Failed to notify: {}", err);
                                     tracing::debug!("{:?}", err);

@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, Input } from '@angular/core'
-import { AlertController } from '@ionic/angular'
+import { ConnectionService } from 'src/app/services/connection.service'
 import {
   HealthResult,
   PackageDataEntry,
@@ -13,14 +13,13 @@ import {
 })
 export class AppShowHealthChecksComponent {
   @Input()
-  pkg: PackageDataEntry
-
-  @Input()
-  connectionFailure = false
+  pkg!: PackageDataEntry
 
   HealthResult = HealthResult
 
-  constructor(private readonly alertCtrl: AlertController) {}
+  readonly disconnected$ = this.connectionService.watchDisconnected$()
+
+  constructor(private readonly connectionService: ConnectionService) {}
 
   isLoading(result: HealthResult): boolean {
     return result === HealthResult.Starting || result === HealthResult.Loading
