@@ -4,7 +4,6 @@ import { Routes, RouterModule } from '@angular/router'
 import { IonicModule } from '@ionic/angular'
 import { AppShowPage } from './app-show.page'
 import { EmverPipesModule } from '@start9labs/shared'
-import { AppWizardComponentModule } from 'src/app/components/app-wizard/app-wizard.component.module'
 import { StatusComponentModule } from 'src/app/components/status/status.component.module'
 import { AppConfigPageModule } from 'src/app/modals/app-config/app-config.module'
 import { LaunchablePipeModule } from 'src/app/pipes/launchable/launchable.module'
@@ -15,13 +14,13 @@ import { AppShowStatusComponent } from './components/app-show-status/app-show-st
 import { AppShowDependenciesComponent } from './components/app-show-dependencies/app-show-dependencies.component'
 import { AppShowMenuComponent } from './components/app-show-menu/app-show-menu.component'
 import { AppShowHealthChecksComponent } from './components/app-show-health-checks/app-show-health-checks.component'
+import { AppShowAdditionalComponent } from './components/app-show-additional/app-show-additional.component'
 import { HealthColorPipe } from './pipes/health-color.pipe'
 import { ToHealthChecksPipe } from './pipes/to-health-checks.pipe'
 import { ToButtonsPipe } from './pipes/to-buttons.pipe'
 import { ToDependenciesPipe } from './pipes/to-dependencies.pipe'
 import { ToStatusPipe } from './pipes/to-status.pipe'
 import { ProgressDataPipe } from './pipes/progress-data.pipe'
-import { ActionMarketplaceComponentModule } from 'src/app/modals/action-marketplace/action-marketplace.component.module'
 
 const routes: Routes = [
   {
@@ -45,18 +44,17 @@ const routes: Routes = [
     AppShowDependenciesComponent,
     AppShowMenuComponent,
     AppShowHealthChecksComponent,
+    AppShowAdditionalComponent,
   ],
   imports: [
     CommonModule,
     StatusComponentModule,
     IonicModule,
     RouterModule.forChild(routes),
-    AppWizardComponentModule,
     AppConfigPageModule,
     EmverPipesModule,
     LaunchablePipeModule,
     UiPipeModule,
-    ActionMarketplaceComponentModule,
   ],
 })
 export class AppShowPageModule {}

@@ -7,6 +7,7 @@ use tracing::instrument;
 
 use crate::context::RpcContext;
 use crate::id::ImageId;
+use crate::procedure::docker::DockerContainers;
 use crate::procedure::{NoOutput, PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::util::serde::Duration;
@@ -20,6 +21,7 @@ impl HealthChecks {
     #[instrument]
     pub fn validate(
         &self,
+        container: &Option<DockerContainers>,
         eos_version: &Version,
         volumes: &Volumes,
         image_ids: &BTreeSet<ImageId>,
@@ -27,7 +29,7 @@ impl HealthChecks {
         for (_, check) in &self.0 {
             check
                 .implementation
-                .validate(eos_version, &volumes, image_ids, false)
+                .validate(container, eos_version, &volumes, image_ids, false)
                 .with_ctx(|_| {
                     (
                         crate::ErrorKind::ValidateS9pk,
@@ -40,6 +42,7 @@ impl HealthChecks {
     pub async fn check_all(
         &self,
         ctx: &RpcContext,
+        container: &Option<DockerContainers>,
         started: DateTime<Utc>,
         pkg_id: &PackageId,
         pkg_version: &Version,
@@ -49,7 +52,7 @@ impl HealthChecks {
             Ok::<_, Error>((
                 id.clone(),
                 check
-                    .check(ctx, id, started, pkg_id, pkg_version, volumes)
+                    .check(ctx, container, id, started, pkg_id, pkg_version, volumes)
                     .await?,
             ))
         }))
@@ -72,6 +75,7 @@ impl HealthCheck {
     pub async fn check(
         &self,
         ctx: &RpcContext,
+        container: &Option<DockerContainers>,
         id: &HealthCheckId,
         started: DateTime<Utc>,
         pkg_id: &PackageId,
@@ -87,7 +91,6 @@ impl HealthCheck {
                 ProcedureName::Health(id.clone()),
                 volumes,
                 Some(Utc::now().signed_duration_since(started).num_milliseconds()),
-                true,
                 Some(
                     self.timeout
                         .map_or(std::time::Duration::from_secs(30), |d| *d),

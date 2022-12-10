@@ -21,12 +21,13 @@ pub async fn properties(#[context] ctx: RpcContext, #[arg] id: PackageId) -> Res
 #[instrument(skip(ctx))]
 pub async fn fetch_properties(ctx: RpcContext, id: PackageId) -> Result<Value, Error> {
     let mut db = ctx.db.handle();
+
     let manifest: Manifest = crate::db::DatabaseModel::new()
         .package_data()
         .idx_model(&id)
         .and_then(|p| p.installed())
         .map(|m| m.manifest())
-        .get(&mut db, true)
+        .get(&mut db)
         .await?
         .to_owned()
         .ok_or_else(|| Error::new(eyre!("{} is not installed", id), ErrorKind::NotFound))?;
@@ -39,7 +40,6 @@ pub async fn fetch_properties(ctx: RpcContext, id: PackageId) -> Result<Value, E
                 ProcedureName::Properties,
                 &manifest.volumes,
                 None,
-                false,
                 None,
             )
             .await?

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use chrono::Utc;
 use clap::ArgMatches;
@@ -8,7 +7,7 @@ use color_eyre::eyre::eyre;
 use helpers::AtomicFile;
 use openssl::pkey::{PKey, Private};
 use openssl::x509::X509;
-use patch_db::{DbHandle, LockType, PatchDbHandle, Revision};
+use patch_db::{DbHandle, LockType, PatchDbHandle};
 use rpc_toolkit::command;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -22,7 +21,6 @@ use crate::auth::check_password_against_db;
 use crate::backup::{BackupReport, ServerBackupReport};
 use crate::context::RpcContext;
 use crate::db::model::BackupProgress;
-use crate::db::util::WithRevision;
 use crate::disk::mount::backup::BackupMountGuard;
 use crate::disk::mount::filesystem::ReadWrite;
 use crate::disk::mount::guard::TmpMountGuard;
@@ -127,28 +125,36 @@ fn parse_comma_separated(arg: &str, _: &ArgMatches) -> Result<BTreeSet<PackageId
 pub async fn backup_all(
     #[context] ctx: RpcContext,
     #[arg(rename = "target-id")] target_id: BackupTargetId,
-    #[arg(rename = "old-password", long = "old-password")] old_password: Option<String>,
+    #[arg(rename = "old-password", long = "old-password")] old_password: Option<
+        crate::auth::PasswordType,
+    >,
     #[arg(
         rename = "package-ids",
         long = "package-ids",
         parse(parse_comma_separated)
     )]
     package_ids: Option<BTreeSet<PackageId>>,
-    #[arg] password: String,
-) -> Result<WithRevision<()>, Error> {
+    #[arg] password: crate::auth::PasswordType,
+) -> Result<(), Error> {
     let mut db = ctx.db.handle();
+    let old_password_decrypted = old_password
+        .as_ref()
+        .unwrap_or(&password)
+        .clone()
+        .decrypt(&ctx)?;
+    let password = password.decrypt(&ctx)?;
     check_password_against_db(&mut ctx.secret_store.acquire().await?, &password).await?;
     let fs = target_id
         .load(&mut ctx.secret_store.acquire().await?)
         .await?;
     let mut backup_guard = BackupMountGuard::mount(
         TmpMountGuard::mount(&fs, ReadWrite).await?,
-        old_password.as_ref().unwrap_or(&password),
+        &old_password_decrypted,
     )
     .await?;
     let all_packages = crate::db::DatabaseModel::new()
         .package_data()
-        .get(&mut db, false)
+        .get(&mut db)
         .await?
         .0
         .keys()
@@ -159,7 +165,7 @@ pub async fn backup_all(
     if old_password.is_some() {
         backup_guard.change_password(&password)?;
     }
-    let revision = assure_backing_up(&mut db, &package_ids).await?;
+    assure_backing_up(&mut db, &package_ids).await?;
     tokio::task::spawn(async move {
         let backup_res = perform_backup(&ctx, &mut db, backup_guard, &package_ids).await;
         let backup_progress = crate::db::DatabaseModel::new()
@@ -238,17 +244,14 @@ pub async fn backup_all(
             .await
             .expect("failed to change server status");
     });
-    Ok(WithRevision {
-        response: (),
-        revision,
-    })
+    Ok(())
 }
 
 #[instrument(skip(db, packages))]
 async fn assure_backing_up(
     db: &mut PatchDbHandle,
     packages: impl IntoIterator<Item = &PackageId>,
-) -> Result<Option<Arc<Revision>>, Error> {
+) -> Result<(), Error> {
     let mut tx = db.begin().await?;
     let mut backing_up = crate::db::DatabaseModel::new()
         .server_info()
@@ -279,7 +282,8 @@ async fn assure_backing_up(
             .collect(),
     );
     backing_up.save(&mut tx).await?;
-    Ok(tx.commit(None).await?)
+    tx.commit().await?;
+    Ok(())
 }
 
 #[instrument(skip(ctx, db, backup_guard))]
@@ -293,7 +297,7 @@ async fn perform_backup<Db: DbHandle>(
 
     for package_id in crate::db::DatabaseModel::new()
         .package_data()
-        .keys(&mut db, false)
+        .keys(&mut db)
         .await?
         .into_iter()
         .filter(|id| package_ids.contains(id))
@@ -313,7 +317,7 @@ async fn perform_backup<Db: DbHandle>(
         let main_status_model = installed_model.clone().status().main();
 
         main_status_model.lock(&mut tx, LockType::Write).await?;
-        let (started, health) = match main_status_model.get(&mut tx, true).await?.into_owned() {
+        let (started, health) = match main_status_model.get(&mut tx).await?.into_owned() {
             MainStatus::Starting { .. } => (Some(Utc::now()), Default::default()),
             MainStatus::Running { started, health } => (Some(started), health.clone()),
             MainStatus::Stopped | MainStatus::Stopping | MainStatus::Restarting => {
@@ -342,11 +346,7 @@ async fn perform_backup<Db: DbHandle>(
             .await?;
         tx.save().await?; // drop locks
 
-        let manifest = installed_model
-            .clone()
-            .manifest()
-            .get(&mut db, false)
-            .await?;
+        let manifest = installed_model.clone().manifest().get(&mut db).await?;
 
         ctx.managers
             .get(&(manifest.id.clone(), manifest.version.clone()))
@@ -441,7 +441,7 @@ async fn perform_backup<Db: DbHandle>(
                 root_ca_cert,
                 ui: crate::db::DatabaseModel::new()
                     .ui()
-                    .get(&mut db, true)
+                    .get(&mut db)
                     .await?
                     .into_owned(),
             })?,

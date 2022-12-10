@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::convert::TryInto;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use chrono::Utc;
@@ -11,10 +9,10 @@ use crate::Error;
 
 /// Allocates a db handle. DO NOT CALL with a db handle already in scope
 async fn synchronize_once(shared: &ManagerSharedState) -> Result<Status, Error> {
-    let mut db = shared.ctx.db.handle();
+    let mut db = shared.seed.ctx.db.handle();
     let mut status = crate::db::DatabaseModel::new()
         .package_data()
-        .idx_model(&shared.manifest.id)
+        .idx_model(&shared.seed.manifest.id)
         .expect(&mut db)
         .await?
         .installed()
@@ -24,7 +22,7 @@ async fn synchronize_once(shared: &ManagerSharedState) -> Result<Status, Error> 
         .main()
         .get_mut(&mut db)
         .await?;
-    let manager_status = shared.status.load(Ordering::SeqCst).try_into().unwrap();
+    let manager_status = *shared.status.1.borrow();
     match manager_status {
         Status::Stopped => match &mut *status {
             MainStatus::Stopped => (),
@@ -83,17 +81,19 @@ async fn synchronize_once(shared: &ManagerSharedState) -> Result<Status, Error> 
 }
 
 pub async fn synchronizer(shared: &ManagerSharedState) {
+    let mut status_recv = shared.status.0.subscribe();
     loop {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(5)) => (),
             _ = shared.synchronize_now.notified() => (),
+            _ = status_recv.changed() => (),
         }
         let status = match synchronize_once(shared).await {
             Err(e) => {
                 tracing::error!(
                     "Synchronizer for {}@{} failed: {}",
-                    shared.manifest.id,
-                    shared.manifest.version,
+                    shared.seed.manifest.id,
+                    shared.seed.manifest.version,
                     e
                 );
                 tracing::debug!("{:?}", e);
@@ -101,7 +101,7 @@ pub async fn synchronizer(shared: &ManagerSharedState) {
             }
             Ok(status) => status,
         };
-        tracing::trace!("{} status synchronized", shared.manifest.id);
+        tracing::trace!("{} status synchronized", shared.seed.manifest.id);
         shared.synchronized.notify_waiters();
         match status {
             Status::Shutdown => {

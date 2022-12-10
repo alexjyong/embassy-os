@@ -1,5 +1,8 @@
 .DS_Store
 .idea
+system-images/binfmt/binfmt.tar
+system-images/compat/compat.tar
+system-images/util/util.tar
 /*.img
 /*.img.gz
 /*.img.xz
@@ -15,4 +18,11 @@ secrets.db
 /cargo-deps/**/*
 /ENVIRONMENT.txt
 /GIT_HASH.txt
-/eos.tar.gz
+/VERSION.txt
+/embassyos-*.tar.gz
+/eos-*.tar.gz
+/*.deb
+/target
+/*.squashfs
+/debian
+/DEBIAN

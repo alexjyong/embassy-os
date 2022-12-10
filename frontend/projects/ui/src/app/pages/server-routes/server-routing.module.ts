@@ -35,24 +35,10 @@ const routes: Routes = [
       ),
   },
   {
-    path: 'marketplaces',
-    loadChildren: () =>
-      import('./marketplaces/marketplaces.module').then(
-        m => m.MarketplacesPageModule,
-      ),
-  },
-  {
     path: 'metrics',
     loadChildren: () =>
       import('./server-metrics/server-metrics.module').then(
         m => m.ServerMetricsPageModule,
-      ),
-  },
-  {
-    path: 'preferences',
-    loadChildren: () =>
-      import('./preferences/preferences.module').then(
-        m => m.PreferencesPageModule,
       ),
   },
   {

@@ -1,6 +1,3 @@
-@import '~swiper/scss';
-@import '~@ionic/angular/css/ionic-swiper';
-
 @font-face {
   font-family: 'Montserrat';
   font-style: normal;
@@ -27,6 +24,13 @@
   font-style: normal;
   font-weight: normal;
   src: url('/assets/fonts/Open_Sans/OpenSans-Regular.ttf');
+}
+
+@font-face {
+  font-family: 'Open Sans';
+  font-style: normal;
+  font-weight: 600;
+  src: url('/assets/fonts/Open_Sans/OpenSans-SemiBold.ttf');
 }
 
 @font-face {
@@ -60,12 +64,6 @@
 }
 
 $subheader-height: 48px;
-
-.swiper {
-  .swiper-slide {
-    display: unset;
-  }
-}
 
 .btn-128 {
   min-width: 128px;
@@ -155,6 +153,22 @@ ion-toast {
 
 img {
   border-radius: 100%;
+}
+
+ion-back-button {
+  margin-left: 16px;
+  height: 36px;
+  width: 36px;
+  --min-height: 0;
+  --min-width: 0;
+  min-width: 0;
+  --icon-font-size: 36px;
+  &::part(native) {
+    border: 1px solid gray;
+  }
+  &::part(icon) {
+    min-width: 20px;
+  }
 }
 
 ion-card-title {
@@ -253,7 +267,7 @@ ion-item-divider {
 }
 
 ion-item {
-  border-radius: 6px;
+  --border-radius: 6px;
   --ripple-color: transparent;
 }
 
@@ -264,12 +278,6 @@ ion-label {
 ion-loading {
   --spinner-color: var(--ion-color-warning) !important;
   z-index: 40000 !important;
-}
-
-.swiper-pagination {
-  position: fixed;
-  bottom: 0px;
-  padding-bottom: 3px;
 }
 
 .rec-item {

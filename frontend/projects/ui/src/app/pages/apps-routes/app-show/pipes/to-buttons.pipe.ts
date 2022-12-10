@@ -2,25 +2,22 @@ import { Inject, Pipe, PipeTransform } from '@angular/core'
 import { ActivatedRoute } from '@angular/router'
 import { DOCUMENT } from '@angular/common'
 import { AlertController, ModalController, NavController } from '@ionic/angular'
+import { MarkdownComponent } from '@start9labs/shared'
 import {
-  isValidHttpUrl,
-  MarkdownComponent,
-  removeTrailingSlash,
-} from '@start9labs/shared'
-import {
+  DataModel,
   PackageDataEntry,
-  UIMarketplaceData,
 } from 'src/app/services/patch-db/data-model'
 import { ModalService } from 'src/app/services/modal.service'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { from } from 'rxjs'
-import { Marketplace } from '@start9labs/marketplace'
-import { ActionMarketplaceComponent } from 'src/app/modals/action-marketplace/action-marketplace.component'
+import { from, map, Observable } from 'rxjs'
+import { PatchDB } from 'patch-db-client'
+
 export interface Button {
   title: string
   description: string
   icon: string
   action: Function
+  highlighted$?: Observable<boolean>
   disabled?: boolean
 }
 
@@ -36,13 +33,10 @@ export class ToButtonsPipe implements PipeTransform {
     private readonly modalCtrl: ModalController,
     private readonly modalService: ModalService,
     private readonly apiService: ApiService,
+    private readonly patch: PatchDB<DataModel>,
   ) {}
 
-  transform(
-    pkg: PackageDataEntry,
-    currentMarketplace: Marketplace | null,
-    altMarketplaces: UIMarketplaceData | null | undefined,
-  ): Button[] {
+  transform(pkg: PackageDataEntry): Button[] {
     const pkgTitle = pkg.manifest.title
 
     return [
@@ -52,6 +46,9 @@ export class ToButtonsPipe implements PipeTransform {
         title: 'Instructions',
         description: `Understand how to use ${pkgTitle}`,
         icon: 'list-outline',
+        highlighted$: this.patch
+          .watch$('ui', 'ack-instructions', pkg.manifest.id)
+          .pipe(map(seen => !seen)),
       },
       // config
       {
@@ -59,7 +56,7 @@ export class ToButtonsPipe implements PipeTransform {
           this.modalService.presentModalConfig({ pkgId: pkg.manifest.id }),
         title: 'Config',
         description: `Customize ${pkgTitle}`,
-        icon: 'construct-outline',
+        icon: 'options-outline',
       },
       // properties
       {
@@ -99,7 +96,7 @@ export class ToButtonsPipe implements PipeTransform {
         icon: 'receipt-outline',
       },
       // view in marketplace
-      this.viewInMarketplaceButton(pkg, currentMarketplace, altMarketplaces),
+      this.viewInMarketplaceButton(pkg),
       // donate
       {
         action: () => this.donate(pkg),
@@ -111,6 +108,10 @@ export class ToButtonsPipe implements PipeTransform {
   }
 
   private async presentModalInstructions(pkg: PackageDataEntry) {
+    this.apiService
+      .setDbValue<boolean>(['ack-instructions', pkg.manifest.id], true)
+      .catch(e => console.error('Failed to mark instructions as seen', e))
+
     const modal = await this.modalCtrl.create({
       componentProps: {
         title: 'Instructions',
@@ -124,56 +125,27 @@ export class ToButtonsPipe implements PipeTransform {
     await modal.present()
   }
 
-  private viewInMarketplaceButton(
-    pkg: PackageDataEntry,
-    currentMarketplace: Marketplace | null,
-    altMarketplaces: UIMarketplaceData | null | undefined,
-  ): Button {
-    const pkgMarketplace = pkg.installed?.['marketplace-url']
-    // default button if package marketplace and current marketplace are the same
+  private viewInMarketplaceButton(pkg: PackageDataEntry): Button {
+    const url = pkg.installed?.['marketplace-url']
+    const queryParams = url ? { url } : {}
+
     let button: Button = {
-      title: 'Marketplace',
+      title: 'Marketplace Listing',
       icon: 'storefront-outline',
       action: () =>
-        this.navCtrl.navigateForward([`marketplace/${pkg.manifest.id}`]),
+        this.navCtrl.navigateForward([`marketplace/${pkg.manifest.id}`], {
+          queryParams,
+        }),
       disabled: false,
-      description: 'View service in marketplace',
+      description: 'View service in the marketplace',
     }
-    if (!pkgMarketplace) {
-      button.disabled = true
-      button.description = 'This package was not installed from a marketplace.'
-      button.action = () => {}
-    } else if (
-      pkgMarketplace &&
-      currentMarketplace &&
-      removeTrailingSlash(pkgMarketplace) !==
-        removeTrailingSlash(currentMarketplace.url)
-    ) {
-      // attempt to get name for pkg marketplace
-      let pkgTitle = removeTrailingSlash(pkgMarketplace)
-      if (altMarketplaces) {
-        const nameOptions = Object.values(
-          altMarketplaces['known-hosts'],
-        ).filter(m => m.url === pkgTitle)
-        if (nameOptions.length) {
-          // if multiple of the same url exist, they will have the same name, so fine to grab first
-          pkgTitle = nameOptions[0].name
-        }
-      }
-      let marketplaceTitle = removeTrailingSlash(currentMarketplace.url)
-      // if we found a name for the pkg marketplace, use the name of the currently connected marketplace
-      if (!isValidHttpUrl(pkgTitle)) {
-        marketplaceTitle = currentMarketplace.name
-      }
 
-      button.action = () =>
-        this.differentMarketplaceAction(
-          pkgTitle,
-          marketplaceTitle,
-          pkg.manifest.id,
-        )
-      button.description = 'Service was installed from a different marketplace'
+    if (!url) {
+      button.disabled = true
+      button.description = 'This package was not installed from the marketplace'
+      button.action = () => {}
     }
+
     return button
   }
 
@@ -188,23 +160,5 @@ export class ToButtonsPipe implements PipeTransform {
       })
       await alert.present()
     }
-  }
-
-  private async differentMarketplaceAction(
-    packageMarketplace: string,
-    currentMarketplace: string,
-    pkgId: string,
-  ) {
-    const modal = await this.modalCtrl.create({
-      component: ActionMarketplaceComponent,
-      componentProps: {
-        title: 'Marketplace Conflict',
-        packageMarketplace,
-        currentMarketplace,
-        pkgId,
-      },
-      cssClass: 'medium-modal',
-    })
-    await modal.present()
   }
 }

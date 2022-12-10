@@ -1,23 +1,20 @@
 {
   "useMocks": true,
-  "targetArch": "aarch64",
+  "packageArch": "aarch64",
+  "osArch": "rasberrypi",
   "ui": {
-    "patchDb": {
-      "poll": {
-        "cooldown": 10000
-      }
-    },
     "api": {
       "url": "rpc",
       "version": "v1"
     },
+    "marketplace": {
+      "start9": "https://registry.start9.com/",
+      "community": "https://community-registry.start9.com/",
+      "beta": "https://beta-registry.start9.com/"
+    },
     "mocks": {
       "maskAs": "tor",
       "skipStartupAlerts": true
-    },
-    "marketplace": {
-      "url": "https://registry.start9.com/",
-      "name": "Start9 Marketplace"
     }
   },
   "gitHash": ""

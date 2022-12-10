@@ -1,4 +1,4 @@
-import { ErrorHandler, NgModule } from '@angular/core'
+import { NgModule } from '@angular/core'
 import { BrowserModule } from '@angular/platform-browser'
 import { RouteReuseStrategy } from '@angular/router'
 import { HttpClientModule } from '@angular/common/http'
@@ -12,16 +12,17 @@ import {
 } from '@ionic/angular'
 import { AppComponent } from './app.component'
 import { AppRoutingModule } from './app-routing.module'
-import { GlobalErrorHandler } from './services/global-error-handler.service'
 import { SuccessPageModule } from './pages/success/success.module'
 import { HomePageModule } from './pages/home/home.module'
 import { LoadingPageModule } from './pages/loading/loading.module'
-import { ProdKeyModalModule } from './modals/prod-key-modal/prod-key-modal.module'
-import { ProductKeyPageModule } from './pages/product-key/product-key.module'
 import { RecoverPageModule } from './pages/recover/recover.module'
-import { WorkspaceConfig } from '@start9labs/shared'
+import { TransferPageModule } from './pages/transfer/transfer.module'
+import { RELATIVE_URL, WorkspaceConfig } from '@start9labs/shared'
 
-const { useMocks } = require('../../../../config.json') as WorkspaceConfig
+const {
+  useMocks,
+  ui: { api },
+} = require('../../../../config.json') as WorkspaceConfig
 
 @NgModule({
   declarations: [AppComponent],
@@ -36,9 +37,8 @@ const { useMocks } = require('../../../../config.json') as WorkspaceConfig
     SuccessPageModule,
     HomePageModule,
     LoadingPageModule,
-    ProdKeyModalModule,
-    ProductKeyPageModule,
     RecoverPageModule,
+    TransferPageModule,
   ],
   providers: [
     { provide: RouteReuseStrategy, useClass: IonicRouteStrategy },
@@ -46,7 +46,10 @@ const { useMocks } = require('../../../../config.json') as WorkspaceConfig
       provide: ApiService,
       useClass: useMocks ? MockApiService : LiveApiService,
     },
-    { provide: ErrorHandler, useClass: GlobalErrorHandler },
+    {
+      provide: RELATIVE_URL,
+      useValue: `/${api.url}/${api.version}`,
+    },
   ],
   bootstrap: [AppComponent],
 })

@@ -1,11 +1,9 @@
-<a class="logo ion-padding" routerLink="/services">
+<a class="logo ion-padding" routerLink="/home">
   <img alt="Start9" src="assets/img/logo.png" />
 </a>
-<div class="divider"></div>
 <ion-item-group class="menu">
-  <ion-menu-toggle *ngFor="let page of pages; let i = index" auto-hide="false">
+  <ion-menu-toggle *ngFor="let page of pages" auto-hide="false">
     <ion-item
-      *ngIf="page.url !== '/developer' || (showDevTools$ | async)"
       button
       class="link"
       color="transparent"
@@ -24,15 +22,13 @@
         {{ page.title }}
       </ion-label>
       <ion-icon
-        *ngIf="page.url === '/embassy' && (showEOSUpdate$ | async)"
+        *ngIf="page.url === '/system' && (showEOSUpdate$ | async)"
         color="success"
         size="small"
         name="rocket-outline"
       ></ion-icon>
       <ion-badge
-        *ngIf="
-          page.url === '/marketplace' && (updateCount$ | async) as updateCount
-        "
+        *ngIf="page.url === '/updates' && (updateCount$ | async) as updateCount"
         color="success"
       >
         {{ updateCount }}
@@ -49,6 +45,7 @@
     </ion-item>
   </ion-menu-toggle>
 </ion-item-group>
+
 <img
   appSnek
   class="snek"
@@ -56,21 +53,6 @@
   src="assets/img/icons/snek.png"
   [appSnekHighScore]="snekScore$ | async"
 />
-<div class="bottom">
-  <div class="divider" style="margin-bottom: 10px"></div>
-  <ion-menu-toggle auto-hide="false">
-    <ion-item
-      button
-      lines="none"
-      style="--background: transparent; margin-bottom: 86px; text-align: center"
-      fill="clear"
-      (click)="presentAlertLogout()"
-    >
-      <ion-label class="inline">
-        <h2>Log Out</h2>
-        &nbsp;
-        <ion-icon name="log-out-outline"></ion-icon>
-      </ion-label>
-    </ion-item>
-  </ion-menu-toggle>
-</div>
+<ion-footer *ngIf="sidebarOpen$ | async" class="bottom">
+  <connection-bar></connection-bar>
+</ion-footer>

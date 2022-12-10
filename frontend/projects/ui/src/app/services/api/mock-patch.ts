@@ -7,29 +7,39 @@ import {
   PackageMainStatus,
   PackageState,
 } from 'src/app/services/patch-db/data-model'
+import { Mock } from './api.fixures'
 
 export const mockPatchData: DataModel = {
   ui: {
     name: `Matt's Embassy`,
-    'auto-check-updates': true,
-    'pkg-order': [],
     'ack-welcome': '1.0.0',
     marketplace: {
-      'selected-id': '1234',
+      'selected-url': 'https://registry.start9.com/',
       'known-hosts': {
-        '1234': {
+        'https://registry.start9.com/': {
+          name: 'Start9 Registry',
+        },
+        'https://community-registry.start9.com/': {},
+        'https://dark9-marketplace.com/': {
           name: 'Dark9',
-          url: 'https://test-marketplace.com',
         },
       },
     },
+    dev: {},
+    gaming: {
+      snake: {
+        'high-score': 0,
+      },
+    },
+    'ack-instructions': {},
   },
   'server-info': {
     id: 'abcdefgh',
-    version: '0.3.1.1',
-    'last-backup': null,
+    version: '0.3.3',
+    'last-backup': new Date(new Date().valueOf() - 604800001).toISOString(),
     'lan-address': 'https://embassy-abcdefgh.local',
     'tor-address': 'http://myveryownspecialtoraddress.onion',
+    'last-wifi-region': null,
     'unread-notification-count': 4,
     // password is asdfasdf
     'password-hash':
@@ -40,13 +50,7 @@ export const mockPatchData: DataModel = {
       updated: false,
       'update-progress': null,
     },
-  },
-  'recovered-packages': {
-    'btc-rpc-proxy': {
-      title: 'Bitcoin Proxy',
-      icon: 'assets/img/service-icons/btc-rpc-proxy.png',
-      version: '0.2.2',
-    },
+    hostname: 'random-words',
   },
   'package-data': {
     bitcoind: {
@@ -60,6 +64,7 @@ export const mockPatchData: DataModel = {
         id: 'bitcoind',
         title: 'Bitcoin Core',
         version: '0.20.0',
+        'git-hash': 'abcdefgh',
         description: {
           short: 'A Bitcoin full node by Bitcoin Core.',
           long: 'Bitcoin is a decentralized consensus protocol and settlement network.',
@@ -378,11 +383,13 @@ export const mockPatchData: DataModel = {
             },
           },
         },
-        permissions: {},
         dependencies: {},
       },
       installed: {
-        manifest: {} as Manifest,
+        manifest: {
+          ...Mock.MockManifestBitcoind,
+          version: '0.20.0',
+        },
         'last-backup': null,
         status: {
           configured: true,
@@ -434,7 +441,7 @@ export const mockPatchData: DataModel = {
         },
         'current-dependencies': {},
         'dependency-info': {},
-        'marketplace-url': 'marketplace-url.com',
+        'marketplace-url': 'https://registry.start9.com/',
         'developer-key': 'developer-key',
       },
     },
@@ -575,7 +582,6 @@ export const mockPatchData: DataModel = {
             'input-spec': null,
           },
         },
-        permissions: {},
         dependencies: {
           bitcoind: {
             version: '=0.21.0',
@@ -649,7 +655,7 @@ export const mockPatchData: DataModel = {
             icon: 'assets/img/service-icons/btc-rpc-proxy.png',
           },
         },
-        'marketplace-url': 'marketplace-url.com',
+        'marketplace-url': 'https://registry.start9.com/',
         'developer-key': 'developer-key',
       },
     },

@@ -2,11 +2,11 @@ import { Injectable } from '@angular/core'
 import { Emver } from '@start9labs/shared'
 import { BehaviorSubject, combineLatest } from 'rxjs'
 import { distinctUntilChanged, map } from 'rxjs/operators'
-
 import { MarketplaceEOS } from 'src/app/services/api/api.types'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
+import { PatchDB } from 'patch-db-client'
 import { getServerInfo } from 'src/app/util/get-server-info'
+import { DataModel } from './patch-db/data-model'
 
 @Injectable({
   providedIn: 'root',
@@ -48,17 +48,13 @@ export class EOSService {
   constructor(
     private readonly api: ApiService,
     private readonly emver: Emver,
-    private readonly patch: PatchDbService,
+    private readonly patch: PatchDB<DataModel>,
   ) {}
 
-  async getEOS(): Promise<boolean> {
-    const { id, version } = await getServerInfo(this.patch)
-    this.eos = await this.api.getEos({
-      'server-id': id,
-      'eos-version': version,
-    })
+  async loadEos(): Promise<void> {
+    const { version } = await getServerInfo(this.patch)
+    this.eos = await this.api.getEos()
     const updateAvailable = this.emver.compare(this.eos.version, version) === 1
     this.updateAvailable$.next(updateAvailable)
-    return updateAvailable
   }
 }

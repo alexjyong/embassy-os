@@ -7,10 +7,11 @@ import {
 } from '@ionic/angular'
 import {
   ApiService,
-  DiskInfo,
+  BackupRecoverySource,
   DiskRecoverySource,
+  DiskMigrateSource,
 } from 'src/app/services/api/api.service'
-import { ErrorToastService } from '@start9labs/shared'
+import { DiskInfo, ErrorToastService, GuidPipe } from '@start9labs/shared'
 import { StateService } from 'src/app/services/state.service'
 import { PasswordPage } from '../../modals/password/password.page'
 
@@ -18,6 +19,7 @@ import { PasswordPage } from '../../modals/password/password.page'
   selector: 'app-embassy',
   templateUrl: 'embassy.page.html',
   styleUrls: ['embassy.page.scss'],
+  providers: [GuidPipe],
 })
 export class EmbassyPage {
   storageDrives: DiskInfo[] = []
@@ -31,6 +33,7 @@ export class EmbassyPage {
     private readonly stateService: StateService,
     private readonly loadingCtrl: LoadingController,
     private readonly errorToastService: ErrorToastService,
+    private readonly guidPipe: GuidPipe,
   ) {}
 
   async ngOnInit() {
@@ -49,29 +52,29 @@ export class EmbassyPage {
   async getDrives() {
     this.loading = true
     try {
-      const { disks, reconnect } = await this.apiService.getDrives()
-      this.storageDrives = disks.filter(
-        d =>
-          !d.partitions
-            .map(p => p.logicalname)
-            .includes(
-              (this.stateService.recoverySource as DiskRecoverySource)
-                ?.logicalname,
-            ),
-      )
-      if (!this.storageDrives.length && reconnect.length) {
-        const list = `<ul>${reconnect.map(recon => `<li>${recon}</li>`)}</ul>`
-        const alert = await this.alertCtrl.create({
-          header: 'Warning',
-          message: `One or more devices you connected had to be reconfigured to support the current hardware platform. Please unplug and replug the following device(s), then refresh the page:<br> ${list}`,
-          buttons: [
-            {
-              role: 'cancel',
-              text: 'OK',
-            },
-          ],
+      const disks = await this.apiService.getDrives()
+      if (this.stateService.setupType === 'fresh') {
+        this.storageDrives = disks
+      } else if (this.stateService.setupType === 'restore') {
+        this.storageDrives = disks.filter(
+          d =>
+            !d.partitions
+              .map(p => p.logicalname)
+              .includes(
+                (
+                  (this.stateService.recoverySource as BackupRecoverySource)
+                    ?.target as DiskRecoverySource
+                )?.logicalname,
+              ),
+        )
+      } else if (this.stateService.setupType === 'transfer') {
+        const guid = (this.stateService.recoverySource as DiskMigrateSource)
+          .guid
+        this.storageDrives = disks.filter(d => {
+          return (
+            d.guid !== guid && !d.partitions.map(p => p.guid).includes(guid)
+          )
         })
-        await alert.present()
       }
     } catch (e: any) {
       this.errorToastService.present(e)
@@ -81,7 +84,10 @@ export class EmbassyPage {
   }
 
   async chooseDrive(drive: DiskInfo) {
-    if (!!drive.partitions.find(p => p.used) || !!drive.guid) {
+    if (
+      this.guidPipe.transform(drive) ||
+      !!drive.partitions.find(p => p.used)
+    ) {
       const alert = await this.alertCtrl.create({
         header: 'Warning',
         subHeader: 'Drive contains data!',
@@ -94,54 +100,59 @@ export class EmbassyPage {
           {
             text: 'Continue',
             handler: () => {
+              // for backup recoveries
               if (this.stateService.recoveryPassword) {
-                this.setupEmbassy(drive, this.stateService.recoveryPassword)
+                this.setupEmbassy(
+                  drive.logicalname,
+                  this.stateService.recoveryPassword,
+                )
               } else {
-                this.presentModalPassword(drive)
+                // for migrations and fresh setups
+                this.presentModalPassword(drive.logicalname)
               }
             },
-            cssClass: 'enter-click',
           },
         ],
       })
       await alert.present()
     } else {
+      // for backup recoveries
       if (this.stateService.recoveryPassword) {
-        this.setupEmbassy(drive, this.stateService.recoveryPassword)
+        this.setupEmbassy(drive.logicalname, this.stateService.recoveryPassword)
       } else {
-        this.presentModalPassword(drive)
+        // for migrations and fresh setups
+        this.presentModalPassword(drive.logicalname)
       }
     }
   }
 
-  private async presentModalPassword(drive: DiskInfo): Promise<void> {
+  private async presentModalPassword(logicalname: string): Promise<void> {
     const modal = await this.modalController.create({
       component: PasswordPage,
       componentProps: {
-        storageDrive: drive,
+        storageDrive: true,
       },
     })
     modal.onDidDismiss().then(async ret => {
       if (!ret.data || !ret.data.password) return
-      this.setupEmbassy(drive, ret.data.password)
+      this.setupEmbassy(logicalname, ret.data.password)
     })
     await modal.present()
   }
 
-  private async setupEmbassy(drive: DiskInfo, password: string): Promise<void> {
+  private async setupEmbassy(
+    logicalname: string,
+    password: string,
+  ): Promise<void> {
     const loader = await this.loadingCtrl.create({
-      message: 'Initializing data drive. This could take a while...',
+      message: 'Connecting to drive...',
+      cssClass: 'loader',
     })
-
     await loader.present()
 
     try {
-      await this.stateService.setupEmbassy(drive.logicalname, password)
-      if (!!this.stateService.recoverySource) {
-        await this.navCtrl.navigateForward(`/loading`)
-      } else {
-        await this.navCtrl.navigateForward(`/success`)
-      }
+      await this.stateService.setupEmbassy(logicalname, password)
+      await this.navCtrl.navigateForward(`/loading`)
     } catch (e: any) {
       this.errorToastService.present({
         message: `${e.message}\n\nRestart Embassy to try again.`,

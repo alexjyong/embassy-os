@@ -1,4 +1,7 @@
-pub const DEFAULT_MARKETPLACE: &str = "https://marketplace.start9.com";
+#![recursion_limit = "256"]
+
+pub const DEFAULT_MARKETPLACE: &str = "https://registry.start9.com";
+// pub const COMMUNITY_MARKETPLACE: &str = "https://community-registry.start9.com";
 pub const BUFFER_SIZE: usize = 1024;
 pub const HOST_IP: [u8; 4] = [172, 18, 0, 1];
 pub const TARGET: &str = current_platform::CURRENT_PLATFORM;
@@ -6,6 +9,9 @@ lazy_static::lazy_static! {
     pub static ref ARCH: &'static str = {
         let (arch, _) = TARGET.split_once("-").unwrap();
         arch
+    };
+    pub static ref IS_RASPBERRY_PI: bool = {
+        *ARCH == "aarch64"
     };
 }
 
@@ -34,6 +40,7 @@ pub mod middleware;
 pub mod migration;
 pub mod net;
 pub mod notifications;
+pub mod os_install;
 pub mod procedure;
 pub mod properties;
 pub mod s9pk;
@@ -41,7 +48,6 @@ pub mod setup;
 pub mod shutdown;
 pub mod sound;
 pub mod ssh;
-pub mod static_server;
 pub mod status;
 pub mod system;
 pub mod update;
@@ -97,7 +103,6 @@ pub fn server() -> Result<(), RpcError> {
     install::install,
     install::sideload,
     install::uninstall,
-    install::delete_recovered,
     install::list,
     install::update::update,
     config::config,
@@ -131,5 +136,10 @@ pub fn diagnostic_api() -> Result<(), RpcError> {
 
 #[command(subcommands(version::git_info, echo, setup::setup))]
 pub fn setup_api() -> Result<(), RpcError> {
+    Ok(())
+}
+
+#[command(subcommands(version::git_info, echo, os_install::install))]
+pub fn install_api() -> Result<(), RpcError> {
     Ok(())
 }

@@ -1,12 +1,13 @@
 use std::fs::File;
 use std::io::BufReader;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::ArgMatches;
 use color_eyre::eyre::eyre;
 use cookie_store::CookieStore;
+use josekit::jwk::Jwk;
 use reqwest::Proxy;
 use reqwest_cookie_store::CookieStoreMutex;
 use rpc_toolkit::reqwest::{Client, Url};
@@ -18,10 +19,11 @@ use tracing::instrument;
 use crate::util::config::{load_config_from_paths, local_config_path};
 use crate::ResultExt;
 
+use super::setup::CURRENT_SECRET;
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct CliContextConfig {
-    pub bind_rpc: Option<SocketAddr>,
     pub host: Option<Url>,
     #[serde(deserialize_with = "crate::util::serde::deserialize_from_str_opt")]
     #[serde(default)]
@@ -81,11 +83,7 @@ impl CliContext {
         } else if let Some(host) = base.host {
             host
         } else {
-            format!(
-                "http://{}",
-                base.bind_rpc.unwrap_or(([127, 0, 0, 1], 80).into())
-            )
-            .parse()?
+            format!("http://localhost").parse()?
         };
         let proxy = if let Some(proxy) = matches.value_of("proxy") {
             Some(proxy.parse()?)
@@ -129,6 +127,11 @@ impl CliContext {
             cookie_store,
             cookie_path,
         })))
+    }
+}
+impl AsRef<Jwk> for CliContext {
+    fn as_ref(&self) -> &Jwk {
+        &*CURRENT_SECRET
     }
 }
 impl std::ops::Deref for CliContext {

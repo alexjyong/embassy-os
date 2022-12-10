@@ -6,12 +6,14 @@ use patch_db::HasModel;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use super::git_hash::GitHash;
 use crate::action::Actions;
 use crate::backup::BackupActions;
 use crate::config::action::ConfigActions;
 use crate::dependencies::Dependencies;
 use crate::migration::Migrations;
 use crate::net::interface::Interfaces;
+use crate::procedure::docker::DockerContainers;
 use crate::procedure::PackageProcedure;
 use crate::status::health_check::HealthChecks;
 use crate::util::Version;
@@ -29,6 +31,8 @@ pub struct Manifest {
     #[serde(default = "current_version")]
     pub eos_version: Version,
     pub id: PackageId,
+    #[serde(default)]
+    pub git_hash: Option<GitHash>,
     pub title: String,
     #[model]
     pub version: Version,
@@ -70,6 +74,8 @@ pub struct Manifest {
     #[serde(default)]
     #[model]
     pub dependencies: Dependencies,
+    #[model]
+    pub containers: Option<DockerContainers>,
 }
 
 impl Manifest {
@@ -92,6 +98,11 @@ impl Manifest {
             .chain(backups)
             .chain(migrations)
             .chain(actions)
+    }
+
+    pub fn with_git_hash(mut self, git_hash: GitHash) -> Self {
+        self.git_hash = Some(git_hash);
+        self
     }
 }
 
@@ -141,7 +152,7 @@ impl Assets {
         self.docker_images
             .as_ref()
             .map(|a| a.as_path())
-            .unwrap_or(Path::new("image.tar"))
+            .unwrap_or(Path::new("docker-images"))
     }
     pub fn assets_path(&self) -> &Path {
         self.assets

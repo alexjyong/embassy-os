@@ -1,8 +1,12 @@
-import { Component, Inject, OnDestroy } from '@angular/core'
+import { Component, OnDestroy } from '@angular/core'
+import { merge } from 'rxjs'
 import { AuthService } from './services/auth.service'
 import { SplitPaneTracker } from './services/split-pane.service'
-import { merge, Observable } from 'rxjs'
-import { GLOBAL_SERVICE } from './app/global/global.module'
+import { PatchDataService } from './services/patch-data.service'
+import { PatchMonitorService } from './services/patch-monitor.service'
+import { ConnectionService } from './services/connection.service'
+import { Title } from '@angular/platform-browser'
+import { ServerNameService } from './services/server-name.service'
 
 @Component({
   selector: 'app-root',
@@ -10,14 +14,24 @@ import { GLOBAL_SERVICE } from './app/global/global.module'
   styleUrls: ['app.component.scss'],
 })
 export class AppComponent implements OnDestroy {
-  readonly subscription = merge(...this.services).subscribe()
+  readonly subscription = merge(this.patchData, this.patchMonitor).subscribe()
+  readonly sidebarOpen$ = this.splitPane.sidebarOpen$
 
   constructor(
-    @Inject(GLOBAL_SERVICE)
-    private readonly services: readonly Observable<unknown>[],
-    readonly authService: AuthService,
+    private readonly titleService: Title,
+    private readonly patchData: PatchDataService,
+    private readonly patchMonitor: PatchMonitorService,
     private readonly splitPane: SplitPaneTracker,
+    private readonly serverNameService: ServerNameService,
+    readonly authService: AuthService,
+    readonly connection: ConnectionService,
   ) {}
+
+  ngOnInit() {
+    this.serverNameService.name$.subscribe(({ current }) =>
+      this.titleService.setTitle(current),
+    )
+  }
 
   splitPaneVisible({ detail }: any) {
     this.splitPane.sidebarOpen$.next(detail.visible)

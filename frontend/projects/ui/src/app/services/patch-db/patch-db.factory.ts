@@ -1,50 +1,53 @@
-import { InjectionToken } from '@angular/core'
-import { exists } from '@start9labs/shared'
-import { filter } from 'rxjs/operators'
+import { InjectionToken, Injector } from '@angular/core'
 import {
-  Bootstrapper,
-  DBCache,
-  MockSource,
-  PollSource,
-  Source,
-  WebsocketSource,
-} from 'patch-db-client'
-
-import { ConfigService } from '../config.service'
-import { ApiService } from '../api/embassy-api.service'
-import { MockApiService } from '../api/embassy-mock-api.service'
+  bufferTime,
+  catchError,
+  filter,
+  switchMap,
+  take,
+  tap,
+} from 'rxjs/operators'
+import { Update } from 'patch-db-client'
 import { DataModel } from './data-model'
-import { BehaviorSubject } from 'rxjs'
+import { defer, EMPTY, from, interval, merge, Observable } from 'rxjs'
+import { AuthService } from '../auth.service'
+import { ConnectionService } from '../connection.service'
+import { ApiService } from '../api/embassy-api.service'
 
-// [wsSources, pollSources]
-export const PATCH_SOURCE = new InjectionToken<Source<DataModel>[]>('')
-export const PATCH_SOURCE$ = new InjectionToken<
-  BehaviorSubject<Source<DataModel>[]>
->('')
-export const PATCH_CACHE = new InjectionToken<DBCache<DataModel>>('', {
-  factory: () => ({} as any),
-})
-export const BOOTSTRAPPER = new InjectionToken<Bootstrapper<DataModel>>('')
+export const PATCH_SOURCE = new InjectionToken<Observable<Update<DataModel>[]>>(
+  '',
+)
 
-export function mockSourceFactory({
-  mockPatch$,
-}: MockApiService): Source<DataModel>[] {
-  return Array(2).fill(
-    new MockSource<DataModel>(mockPatch$.pipe(filter(exists))),
-  )
-}
+export function sourceFactory(
+  injector: Injector,
+): Observable<Update<DataModel>[]> {
+  // defer() needed to avoid circular dependency with ApiService, since PatchDB is needed there
+  return defer(() => {
+    const api = injector.get(ApiService)
+    const authService = injector.get(AuthService)
+    const connectionService = injector.get(ConnectionService)
 
-export function realSourceFactory(
-  embassyApi: ApiService,
-  config: ConfigService,
-  { defaultView }: Document,
-): Source<DataModel>[] {
-  const { patchDb } = config
-  const host = defaultView?.location.host
-  const protocol = defaultView?.location.protocol === 'http:' ? 'ws' : 'wss'
+    const websocket$ = api.openPatchWebsocket$().pipe(
+      bufferTime(250),
+      filter(updates => !!updates.length),
+      catchError((_, watch$) => {
+        connectionService.websocketConnected$.next(false)
 
-  return [
-    new WebsocketSource<DataModel>(`${protocol}://${host}/ws/db`),
-    new PollSource<DataModel>({ ...patchDb.poll }, embassyApi),
-  ]
+        return interval(4000).pipe(
+          switchMap(() =>
+            from(api.echo({ message: 'ping' })).pipe(catchError(() => EMPTY)),
+          ),
+          take(1),
+          switchMap(() => watch$),
+        )
+      }),
+      tap(() => connectionService.websocketConnected$.next(true)),
+    )
+
+    return authService.isVerified$.pipe(
+      switchMap(verified =>
+        verified ? merge(websocket$, api.patchStream$) : EMPTY,
+      ),
+    )
+  })
 }

@@ -37,7 +37,7 @@ export class AppShowStatusComponent {
 
   PR = PrimaryRendering
 
-  disconnected$ = this.connectionService.watchDisconnected$()
+  readonly connected$ = this.connectionService.connected$
 
   constructor(
     private readonly alertCtrl: AlertController,
@@ -158,28 +158,6 @@ export class AppShowStatusComponent {
     } else {
       this.restart()
     }
-  }
-
-  async presentAlertRestart(): Promise<void> {
-    const alert = await this.alertCtrl.create({
-      header: 'Confirm',
-      message: 'Are you sure you want to restart this service?',
-      buttons: [
-        {
-          text: 'Cancel',
-          role: 'cancel',
-        },
-        {
-          text: 'Restart',
-          handler: () => {
-            this.restart()
-          },
-          cssClass: 'enter-click',
-        },
-      ],
-    })
-
-    await alert.present()
   }
 
   private get id(): string {

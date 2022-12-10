@@ -19,10 +19,12 @@ export module Mock {
     'update-progress': null,
     updated: true,
   }
-  export const MarketplaceEos: RR.GetMarketplaceEOSRes = {
-    version: '0.3.2',
+  export const MarketplaceEos: RR.GetMarketplaceEosRes = {
+    version: '0.3.3',
     headline: 'Our biggest release ever.',
     'release-notes': {
+      '0.3.3': 'Some **Markdown** release _notes_ for 0.3.3',
+      '0.3.2.1': 'Some **Markdown** release _notes_ for 0.3.2.1',
       '0.3.2': 'Some **Markdown** release _notes_ for 0.3.2',
       '0.3.1': 'Some **Markdown** release _notes_ for 0.3.1',
       '0.3.0': 'Some **Markdown** release _notes_ from a prior version',
@@ -40,6 +42,7 @@ export module Mock {
     id: 'bitcoind',
     title: 'Bitcoin Core',
     version: '0.21.0',
+    'git-hash': 'abcdefgh',
     description: {
       short: 'A Bitcoin full node by Bitcoin Core.',
       long: 'Bitcoin is a decentralized consensus protocol and settlement network.',
@@ -338,7 +341,6 @@ export module Mock {
         },
       },
     },
-    permissions: {},
     dependencies: {},
   }
 
@@ -472,7 +474,6 @@ export module Mock {
         'input-spec': null,
       },
     },
-    permissions: {},
     dependencies: {
       bitcoind: {
         version: '=0.21.0',
@@ -500,6 +501,7 @@ export module Mock {
     id: 'btc-rpc-proxy',
     title: 'Bitcoin Proxy',
     version: '0.2.2',
+    'git-hash': 'lmnopqrx',
     description: {
       short: 'A super charger for your Bitcoin node.',
       long: 'More info about Bitcoin Proxy. More info about Bitcoin Proxy. More info about Bitcoin Proxy.',
@@ -587,7 +589,6 @@ export module Mock {
     },
     migrations: null,
     actions: {},
-    permissions: {},
     dependencies: {
       bitcoind: {
         version: '>=0.20.0',
@@ -679,7 +680,7 @@ export module Mock {
         manifest: {
           ...Mock.MockManifestBitcoind,
           'release-notes':
-            'For a complete list of changes, please visit <a href="https://bitcoincore.org/en/releases/0.21.0/">https://bitcoincore.org/en/releases/0.21.0/</a><br /><ul><li>Taproot!</li><li>New RPCs</li><li>Experimental Descriptor Wallets</li></ul>',
+            'For a complete list of changes, please visit <a href="https://bitcoincore.org/en/releases/0.21.0/" target="_blank">https://bitcoincore.org/en/releases/0.21.0/</a><br />Or in [markdown](https://bitcoincore.org/en/releases/0.21.0/)<ul><li>Taproot!</li><li>New RPCs</li><li>Experimental Descriptor Wallets</li></ul>',
         },
         categories: ['bitcoin', 'cryptocurrency'],
         versions: ['0.19.0', '0.20.0', '0.21.0'],
@@ -751,7 +752,7 @@ export module Mock {
             icon: PROXY_ICON,
           },
         },
-        'published-at': new Date().toISOString(),
+        'published-at': new Date(new Date().valueOf() + 10).toISOString(),
       },
     },
     'btc-rpc-proxy': {
@@ -1469,6 +1470,14 @@ export module Mock {
             masked: false,
             copyable: true,
           },
+          'private-domain': {
+            name: 'Private Domain',
+            type: 'string',
+            description: 'the private address of the node',
+            nullable: false,
+            masked: true,
+            copyable: true,
+          },
         },
       },
     },
@@ -1726,7 +1735,10 @@ export module Mock {
       rpcuser: '123',
       rulemakers: [],
     },
-    'bitcoin-node': undefined,
+    'bitcoin-node': {
+      type: 'external',
+      'public-domain': 'hello.com',
+    },
     port: 20,
     rpcallowip: undefined,
     rpcauth: ['matt: 8273gr8qwoidm1uid91jeh8y23gdio1kskmwejkdnm'],
@@ -1778,7 +1790,7 @@ export module Mock {
       },
       'current-dependencies': {},
       'dependency-info': {},
-      'marketplace-url': 'marketplace-url.com',
+      'marketplace-url': 'https://registry.start9.com/',
       'developer-key': 'developer-key',
     },
     'install-progress': undefined,
@@ -1827,7 +1839,7 @@ export module Mock {
           icon: 'assets/img/service-icons/bitcoind.png',
         },
       },
-      'marketplace-url': 'marketplace-url.com',
+      'marketplace-url': 'https://registry.start9.com/',
       'developer-key': 'developer-key',
     },
     'install-progress': undefined,
@@ -1887,7 +1899,7 @@ export module Mock {
           icon: 'assets/img/service-icons/btc-rpc-proxy.png',
         },
       },
-      'marketplace-url': 'marketplace-url.com',
+      'marketplace-url': 'https://registry.start9.com/',
       'developer-key': 'developer-key',
     },
     'install-progress': undefined,

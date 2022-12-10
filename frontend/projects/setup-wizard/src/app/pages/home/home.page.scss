@@ -1,0 +1,17 @@
+.back-button {
+  position: absolute;
+  left: 16px;
+  top: 24px;
+  z-index: 1000000;
+}
+
+.inline {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  justify-content: center;
+}
+
+ion-card-title {
+  font-variant-caps: all-small-caps;
+}

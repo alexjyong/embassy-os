@@ -12,7 +12,9 @@ use rpc_toolkit::command_helpers::prelude::RequestParts;
 use rpc_toolkit::hyper::header::COOKIE;
 use rpc_toolkit::hyper::http::Error as HttpError;
 use rpc_toolkit::hyper::{Body, Request, Response};
-use rpc_toolkit::rpc_server_helpers::{noop3, to_response, DynMiddleware, DynMiddlewareStage2};
+use rpc_toolkit::rpc_server_helpers::{
+    noop4, to_response, DynMiddleware, DynMiddlewareStage2, DynMiddlewareStage3,
+};
 use rpc_toolkit::yajrc::RpcMethod;
 use rpc_toolkit::Metadata;
 use serde::{Deserialize, Serialize};
@@ -39,7 +41,7 @@ impl HasLoggedOutSessions {
         for session in logged_out_sessions {
             let session = session.as_logout_session_id();
             sqlx::query!(
-                "UPDATE session SET logged_out = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE session SET logged_out = CURRENT_TIMESTAMP WHERE id = $1",
                 session
             )
             .execute(&mut sqlx_conn)
@@ -66,7 +68,7 @@ impl HasValidSession {
 
     pub async fn from_session(session: &HashSessionToken, ctx: &RpcContext) -> Result<Self, Error> {
         let session_hash = session.hashed();
-        let session = sqlx::query!("UPDATE session SET last_active = CURRENT_TIMESTAMP WHERE id = ? AND logged_out IS NULL OR logged_out > CURRENT_TIMESTAMP", session_hash)
+        let session = sqlx::query!("UPDATE session SET last_active = CURRENT_TIMESTAMP WHERE id = $1 AND logged_out IS NULL OR logged_out > CURRENT_TIMESTAMP", session_hash)
             .execute(&mut ctx.secret_store.acquire().await?)
             .await?;
         if session.rows_affected() == 0 {
@@ -198,8 +200,7 @@ pub fn auth<M: Metadata>(ctx: RpcContext) -> DynMiddleware<M> {
                                     |_| StatusCode::OK,
                                 )?));
                             } else if rpc_req.method.as_str() == "auth.login" {
-                                let mut guard = rate_limiter.lock().await;
-                                guard.0 += 1;
+                                let guard = rate_limiter.lock().await;
                                 if guard.1.elapsed() < Duration::from_secs(20) {
                                     if guard.0 >= 3 {
                                         let (res_parts, _) = Response::new(()).into_parts();
@@ -216,13 +217,25 @@ pub fn auth<M: Metadata>(ctx: RpcContext) -> DynMiddleware<M> {
                                             |_| StatusCode::OK,
                                         )?));
                                     }
+                                }
+                            }
+                        }
+                        let m3: DynMiddlewareStage3 = Box::new(move |_, res| {
+                            async move {
+                                let mut guard = rate_limiter.lock().await;
+                                if guard.1.elapsed() < Duration::from_secs(20) {
+                                    if res.is_err() {
+                                        guard.0 += 1;
+                                    }
                                 } else {
                                     guard.0 = 0;
                                 }
                                 guard.1 = Instant::now();
+                                Ok(Ok(noop4()))
                             }
-                        }
-                        Ok(Ok(noop3()))
+                            .boxed()
+                        });
+                        Ok(Ok(m3))
                     }
                     .boxed()
                 });

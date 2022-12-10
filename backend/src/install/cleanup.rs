@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-use bollard::image::ListImagesOptions;
+use bollard::image::{ListImagesOptions, RemoveImageOptions};
 use patch_db::{DbHandle, LockReceipt, LockTargetId, LockType, PatchDbHandle, Verifier};
-use sqlx::{Executor, Sqlite};
+use sqlx::{Executor, Postgres};
 use tracing::instrument;
 
-use super::{PKG_ARCHIVE_DIR, PKG_DOCKER_DIR};
+use super::PKG_ARCHIVE_DIR;
 use crate::config::{not_found, ConfigReceipts};
 use crate::context::RpcContext;
 use crate::db::model::{
@@ -119,10 +121,29 @@ pub async fn cleanup(ctx: &RpcContext, id: &PackageId, version: &Version) -> Res
         .await
         .apply(|res| errors.handle(res));
     errors.extend(
-        futures::future::join_all(images.into_iter().flatten().map(|image| async {
-            let image = image; // move into future
-            ctx.docker.remove_image(&image.id, None, None).await
-        }))
+        futures::future::join_all(
+            images
+                .into_iter()
+                .flatten()
+                .flat_map(|image| image.repo_tags)
+                .filter(|tag| {
+                    tag.starts_with(&format!("start9/{}/", id))
+                        && tag.ends_with(&format!(":{}", version))
+                })
+                .map(|tag| async {
+                    let tag = tag; // move into future
+                    ctx.docker
+                        .remove_image(
+                            &tag,
+                            Some(RemoveImageOptions {
+                                force: true,
+                                noprune: false,
+                            }),
+                            None,
+                        )
+                        .await
+                }),
+        )
         .await,
     );
     let pkg_archive_dir = ctx
@@ -132,16 +153,6 @@ pub async fn cleanup(ctx: &RpcContext, id: &PackageId, version: &Version) -> Res
         .join(version.as_str());
     if tokio::fs::metadata(&pkg_archive_dir).await.is_ok() {
         tokio::fs::remove_dir_all(&pkg_archive_dir)
-            .await
-            .apply(|res| errors.handle(res));
-    }
-    let docker_path = ctx
-        .datadir
-        .join(PKG_DOCKER_DIR)
-        .join(id)
-        .join(version.as_str());
-    if tokio::fs::metadata(&docker_path).await.is_ok() {
-        tokio::fs::remove_dir_all(&docker_path)
             .await
             .apply(|res| errors.handle(res));
     }
@@ -337,9 +348,14 @@ pub async fn uninstall<Ex>(
     id: &PackageId,
 ) -> Result<(), Error>
 where
-    for<'a> &'a mut Ex: Executor<'a, Database = Sqlite>,
+    for<'a> &'a mut Ex: Executor<'a, Database = Postgres>,
 {
     let mut tx = db.begin().await?;
+    crate::db::DatabaseModel::new()
+        .package_data()
+        .idx_model(&id)
+        .lock(&mut tx, LockType::Write)
+        .await?;
     let receipts = UninstallReceipts::new(&mut tx, id).await?;
     let entry = receipts.removing.get(&mut tx).await?;
     cleanup(ctx, &entry.manifest.id, &entry.manifest.version).await?;
@@ -349,6 +365,14 @@ where
         packages.0.remove(id);
         packages
     };
+    let dependents_paths: Vec<PathBuf> = entry
+        .current_dependents
+        .0
+        .keys()
+        .flat_map(|x| packages.0.get(x))
+        .flat_map(|x| x.manifest_borrow().volumes.values())
+        .flat_map(|x| x.pointer_path(&ctx.datadir))
+        .collect();
     receipts.packages.set(&mut tx, packages).await?;
     // once we have removed the package entry, we can change all the dependent pointers to null
     reconfigure_dependents_with_live_pointers(ctx, &mut tx, &receipts.config, &entry).await?;
@@ -372,22 +396,61 @@ where
         .datadir
         .join(crate::volume::PKG_VOLUME_DIR)
         .join(&entry.manifest.id);
-    if tokio::fs::metadata(&volumes).await.is_ok() {
-        tokio::fs::remove_dir_all(&volumes).await?;
-    }
-    tx.commit(None).await?;
+
+    tracing::debug!("Cleaning up {:?} at {:?}", volumes, dependents_paths);
+    cleanup_folder(volumes, Arc::new(dependents_paths)).await;
     remove_tor_keys(secrets, &entry.manifest.id).await?;
+    tx.commit().await?;
     Ok(())
 }
 
 #[instrument(skip(secrets))]
 pub async fn remove_tor_keys<Ex>(secrets: &mut Ex, id: &PackageId) -> Result<(), Error>
 where
-    for<'a> &'a mut Ex: Executor<'a, Database = Sqlite>,
+    for<'a> &'a mut Ex: Executor<'a, Database = Postgres>,
 {
     let id_str = id.as_str();
-    sqlx::query!("DELETE FROM tor WHERE package = ?", id_str)
+    sqlx::query!("DELETE FROM tor WHERE package = $1", id_str)
         .execute(secrets)
         .await?;
     Ok(())
+}
+
+/// Needed to remove, without removing the folders that are mounted in the other docker containers
+pub fn cleanup_folder(
+    path: PathBuf,
+    dependents_volumes: Arc<Vec<PathBuf>>,
+) -> futures::future::BoxFuture<'static, ()> {
+    Box::pin(async move {
+        let meta_data = match tokio::fs::metadata(&path).await {
+            Ok(a) => a,
+            Err(_e) => {
+                return;
+            }
+        };
+        if !meta_data.is_dir() {
+            tracing::error!("is_not dir, remove {:?}", path);
+            let _ = tokio::fs::remove_file(&path).await;
+            return;
+        }
+        if !dependents_volumes
+            .iter()
+            .any(|v| v.starts_with(&path) || v == &path)
+        {
+            tracing::error!("No parents, remove {:?}", path);
+            let _ = tokio::fs::remove_dir_all(&path).await;
+            return;
+        }
+        let mut read_dir = match tokio::fs::read_dir(&path).await {
+            Ok(a) => a,
+            Err(_e) => {
+                return;
+            }
+        };
+        tracing::error!("Parents, recurse {:?}", path);
+        while let Some(entry) = read_dir.next_entry().await.ok().flatten() {
+            let entry_path = entry.path();
+            cleanup_folder(entry_path, dependents_volumes.clone()).await;
+        }
+    })
 }

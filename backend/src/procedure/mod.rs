@@ -1,17 +1,19 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use color_eyre::eyre::eyre;
 use patch_db::HasModel;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-use self::docker::DockerProcedure;
+use self::docker::{DockerContainers, DockerProcedure};
 use crate::context::RpcContext;
 use crate::id::ImageId;
 use crate::s9pk::manifest::PackageId;
 use crate::util::Version;
 use crate::volume::Volumes;
-use crate::Error;
+use crate::{Error, ErrorKind};
 
 pub mod docker;
 #[cfg(feature = "js_engine")]
@@ -29,6 +31,7 @@ pub enum PackageProcedure {
     #[cfg(feature = "js_engine")]
     Script(js_scripts::JsProcedure),
 }
+
 impl PackageProcedure {
     pub fn is_script(&self) -> bool {
         match self {
@@ -40,6 +43,7 @@ impl PackageProcedure {
     #[instrument]
     pub fn validate(
         &self,
+        container: &Option<DockerContainers>,
         eos_version: &Version,
         volumes: &Volumes,
         image_ids: &BTreeSet<ImageId>,
@@ -49,14 +53,13 @@ impl PackageProcedure {
             PackageProcedure::Docker(action) => {
                 action.validate(eos_version, volumes, image_ids, expected_io)
             }
-
             #[cfg(feature = "js_engine")]
             PackageProcedure::Script(action) => action.validate(volumes),
         }
     }
 
     #[instrument(skip(ctx, input))]
-    pub async fn execute<I: Serialize, O: for<'de> Deserialize<'de>>(
+    pub async fn execute<I: Serialize, O: DeserializeOwned + 'static>(
         &self,
         ctx: &RpcContext,
         pkg_id: &PackageId,
@@ -64,27 +67,43 @@ impl PackageProcedure {
         name: ProcedureName,
         volumes: &Volumes,
         input: Option<I>,
-        allow_inject: bool,
         timeout: Option<Duration>,
     ) -> Result<Result<O, (i32, String)>, Error> {
         tracing::trace!("Procedure execute {} {} - {:?}", self, pkg_id, name);
         match self {
+            PackageProcedure::Docker(procedure) if procedure.inject == true => {
+                procedure
+                    .inject(ctx, pkg_id, pkg_version, name, volumes, input, timeout)
+                    .await
+            }
             PackageProcedure::Docker(procedure) => {
                 procedure
-                    .execute(
-                        ctx,
-                        pkg_id,
-                        pkg_version,
-                        name,
-                        volumes,
-                        input,
-                        allow_inject,
-                        timeout,
-                    )
+                    .execute(ctx, pkg_id, pkg_version, name, volumes, input, timeout)
                     .await
             }
             #[cfg(feature = "js_engine")]
             PackageProcedure::Script(procedure) => {
+                let (gid, rpc_client) = match ctx
+                    .managers
+                    .get(&(pkg_id.clone(), pkg_version.clone()))
+                    .await
+                {
+                    None => {
+                        return Err(Error::new(
+                            eyre!("No manager found for {}", pkg_id),
+                            ErrorKind::NotFound,
+                        ))
+                    }
+                    Some(man) => (
+                        if matches!(name, ProcedureName::Main) {
+                            man.new_main_gid()
+                        } else {
+                            man.new_gid()
+                        },
+                        man.rpc_client(),
+                    ),
+                };
+
                 procedure
                     .execute(
                         &ctx.datadir,
@@ -94,14 +113,18 @@ impl PackageProcedure {
                         volumes,
                         input,
                         timeout,
+                        gid,
+                        rpc_client,
                     )
                     .await
             }
         }
     }
+
     #[instrument(skip(ctx, input))]
-    pub async fn sandboxed<I: Serialize, O: for<'de> Deserialize<'de>>(
+    pub async fn sandboxed<I: Serialize, O: DeserializeOwned>(
         &self,
+        container: &Option<DockerContainers>,
         ctx: &RpcContext,
         pkg_id: &PackageId,
         pkg_version: &Version,
@@ -137,6 +160,7 @@ impl std::fmt::Display for PackageProcedure {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct NoOutput;
 impl<'de> Deserialize<'de> for NoOutput {

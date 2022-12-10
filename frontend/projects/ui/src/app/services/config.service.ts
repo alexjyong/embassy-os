@@ -1,4 +1,5 @@
-import { Injectable } from '@angular/core'
+import { DOCUMENT } from '@angular/common'
+import { Inject, Injectable } from '@angular/core'
 import { WorkspaceConfig } from '@start9labs/shared'
 import {
   InterfaceDef,
@@ -8,23 +9,26 @@ import {
 } from 'src/app/services/patch-db/data-model'
 
 const {
-  targetArch,
+  packageArch,
+  osArch,
   gitHash,
   useMocks,
-  ui: { patchDb, api, mocks, marketplace },
+  ui: { api, marketplace, mocks },
 } = require('../../../../../config.json') as WorkspaceConfig
 
 @Injectable({
   providedIn: 'root',
 })
 export class ConfigService {
-  origin = removePort(removeProtocol(window.origin))
-  version = require('../../../../../package.json').version
+  constructor(@Inject(DOCUMENT) private readonly document: Document) {}
+
+  hostname = this.document.location.hostname
+  version = require('../../../../../package.json').version as string
   useMocks = useMocks
   mocks = mocks
-  targetArch = targetArch
+  packageArch = packageArch
+  osArch = osArch
   gitHash = gitHash
-  patchDb = patchDb
   api = api
   marketplace = marketplace
   skipStartupAlerts = useMocks && mocks.skipStartupAlerts
@@ -33,14 +37,20 @@ export class ConfigService {
 
   isTor(): boolean {
     return (
-      (useMocks && mocks.maskAs === 'tor') || this.origin.endsWith('.onion')
+      this.hostname.endsWith('.onion') || (useMocks && mocks.maskAs === 'tor')
     )
   }
 
   isLan(): boolean {
     return (
-      (useMocks && mocks.maskAs === 'lan') || this.origin.endsWith('.local')
+      this.hostname === 'localhost' ||
+      this.hostname.endsWith('.local') ||
+      (useMocks && mocks.maskAs === 'lan')
     )
+  }
+
+  isSecure(): boolean {
+    return window.isSecureContext || this.isTor()
   }
 
   isLaunchable(

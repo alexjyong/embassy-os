@@ -3,11 +3,7 @@ import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
 import { Routes, RouterModule } from '@angular/router'
 import { IonicModule } from '@ionic/angular'
-import {
-  SharedPipesModule,
-  EmverPipesModule,
-  TextSpinnerComponentModule,
-} from '@start9labs/shared'
+import { SharedPipesModule, EmverPipesModule } from '@start9labs/shared'
 import {
   FilterPackagesPipeModule,
   CategoriesModule,
@@ -16,10 +12,10 @@ import {
   SkeletonModule,
 } from '@start9labs/marketplace'
 import { BadgeMenuComponentModule } from 'src/app/components/badge-menu-button/badge-menu.component.module'
-
 import { MarketplaceStatusModule } from '../marketplace-status/marketplace-status.module'
 import { MarketplaceListPage } from './marketplace-list.page'
-import { MarketplaceListContentComponent } from './marketplace-list-content/marketplace-list-content.component'
+import { MarketplaceSettingsPageModule } from 'src/app/modals/marketplace-settings/marketplace-settings.module'
+import { StoreIconComponentModule } from 'src/app/components/store-icon/store-icon.component.module'
 
 const routes: Routes = [
   {
@@ -34,7 +30,6 @@ const routes: Routes = [
     IonicModule,
     FormsModule,
     RouterModule.forChild(routes),
-    TextSpinnerComponentModule,
     SharedPipesModule,
     EmverPipesModule,
     FilterPackagesPipeModule,
@@ -44,8 +39,10 @@ const routes: Routes = [
     CategoriesModule,
     SearchModule,
     SkeletonModule,
+    MarketplaceSettingsPageModule,
+    StoreIconComponentModule,
   ],
-  declarations: [MarketplaceListPage, MarketplaceListContentComponent],
-  exports: [MarketplaceListPage, MarketplaceListContentComponent],
+  declarations: [MarketplaceListPage],
+  exports: [MarketplaceListPage],
 })
 export class MarketplaceListPageModule {}

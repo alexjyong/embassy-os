@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::eyre;
 use helpers::AtomicFile;
-use patch_db::{DbHandle, HasModel, LockType};
+use patch_db::{DbHandle, HasModel};
 use reqwest::Url;
 use rpc_toolkit::command;
 use serde::{Deserialize, Serialize};
-use sqlx::{Executor, Sqlite};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::instrument;
@@ -19,6 +18,7 @@ use crate::dependencies::reconfigure_dependents_with_live_pointers;
 use crate::id::ImageId;
 use crate::install::PKG_ARCHIVE_DIR;
 use crate::net::interface::{InterfaceId, Interfaces};
+use crate::procedure::docker::DockerContainers;
 use crate::procedure::{NoOutput, PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::util::serde::IoFormat;
@@ -73,15 +73,16 @@ pub struct BackupActions {
 impl BackupActions {
     pub fn validate(
         &self,
+        container: &Option<DockerContainers>,
         eos_version: &Version,
         volumes: &Volumes,
         image_ids: &BTreeSet<ImageId>,
     ) -> Result<(), Error> {
         self.create
-            .validate(eos_version, volumes, image_ids, false)
+            .validate(container, eos_version, volumes, image_ids, false)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Backup Create"))?;
         self.restore
-            .validate(eos_version, volumes, image_ids, false)
+            .validate(container, eos_version, volumes, image_ids, false)
             .with_ctx(|_| (crate::ErrorKind::ValidateS9pk, "Backup Restore"))?;
         Ok(())
     }
@@ -111,7 +112,6 @@ impl BackupActions {
                 ProcedureName::CreateBackup,
                 &volumes,
                 None,
-                false,
                 None,
             )
             .await?
@@ -137,7 +137,7 @@ impl BackupActions {
             .expect(db)
             .await?
             .marketplace_url()
-            .get(db, true)
+            .get(db)
             .await?
             .into_owned();
         let tmp_path = Path::new(BACKUP_DIR)
@@ -183,20 +183,16 @@ impl BackupActions {
         })
     }
 
-    #[instrument(skip(ctx, db, secrets))]
-    pub async fn restore<Ex, Db: DbHandle>(
+    #[instrument(skip(ctx, db))]
+    pub async fn restore<Db: DbHandle>(
         &self,
         ctx: &RpcContext,
         db: &mut Db,
-        secrets: &mut Ex,
         pkg_id: &PackageId,
         pkg_version: &Version,
         interfaces: &Interfaces,
         volumes: &Volumes,
-    ) -> Result<(), Error>
-    where
-        for<'a> &'a mut Ex: Executor<'a, Database = Sqlite>,
-    {
+    ) -> Result<(), Error> {
         let mut volumes = volumes.clone();
         volumes.insert(VolumeId::Backup, Volume::Backup { readonly: true });
         self.restore
@@ -207,7 +203,6 @@ impl BackupActions {
                 ProcedureName::RestoreBackup,
                 &volumes,
                 None,
-                false,
                 None,
             )
             .await?
@@ -222,27 +217,6 @@ impl BackupActions {
                 )
             })?,
         )?;
-        for (iface, key) in metadata.tor_keys {
-            let key_vec = base32::decode(base32::Alphabet::RFC4648 { padding: true }, &key)
-                .ok_or_else(|| {
-                    Error::new(
-                        eyre!("invalid base32 string"),
-                        crate::ErrorKind::Deserialization,
-                    )
-                })?;
-            sqlx::query!(
-                "REPLACE INTO tor (package, interface, key) VALUES (?, ?, ?)",
-                **pkg_id,
-                *iface,
-                key_vec,
-            )
-            .execute(&mut *secrets)
-            .await?;
-        }
-        crate::db::DatabaseModel::new()
-            .package_data()
-            .lock(db, LockType::Write)
-            .await?;
         let pde = crate::db::DatabaseModel::new()
             .package_data()
             .idx_model(pkg_id)
@@ -250,10 +224,6 @@ impl BackupActions {
             .await?
             .installed()
             .expect(db)
-            .await?;
-        pde.clone()
-            .interface_addresses()
-            .put(db, &interfaces.install(&mut *secrets, pkg_id).await?)
             .await?;
         pde.marketplace_url()
             .put(db, &metadata.marketplace_url)
@@ -267,7 +237,7 @@ impl BackupActions {
             .installed()
             .expect(db)
             .await?
-            .get(db, true)
+            .get(db)
             .await?;
 
         let receipts = crate::config::ConfigReceipts::new(db).await?;

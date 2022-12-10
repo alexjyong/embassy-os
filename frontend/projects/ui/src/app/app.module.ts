@@ -2,8 +2,6 @@ import { HttpClientModule } from '@angular/common/http'
 import { NgModule } from '@angular/core'
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations'
 import { IonicModule } from '@ionic/angular'
-import { Drivers } from '@ionic/storage'
-import { IonicStorageModule } from '@ionic/storage-angular'
 import { MonacoEditorModule } from '@materia-ui/ngx-monaco-editor'
 import { MarkdownModule, SharedPipesModule } from '@start9labs/shared'
 
@@ -17,8 +15,9 @@ import { FooterModule } from './app/footer/footer.module'
 import { MenuModule } from './app/menu/menu.module'
 import { EnterModule } from './app/enter/enter.module'
 import { APP_PROVIDERS } from './app.providers'
-import { GlobalModule } from './app/global/global.module'
 import { PatchDbModule } from './services/patch-db/patch-db.module'
+import { ToastContainerModule } from './components/toast-container/toast-container.module'
+import { ConnectionBarComponentModule } from './components/connection-bar/connection-bar.component.module'
 
 @NgModule({
   declarations: [AppComponent],
@@ -29,12 +28,6 @@ import { PatchDbModule } from './services/patch-db/patch-db.module'
       mode: 'md',
     }),
     AppRoutingModule,
-    IonicStorageModule.forRoot({
-      storeName: '_embassykv',
-      dbKey: '_embassykey',
-      name: '_embassystorage',
-      driverOrder: [Drivers.LocalStorage, Drivers.IndexedDB],
-    }),
     MenuModule,
     PreloaderModule,
     FooterModule,
@@ -45,8 +38,9 @@ import { PatchDbModule } from './services/patch-db/patch-db.module'
     MonacoEditorModule,
     SharedPipesModule,
     MarketplaceModule,
-    GlobalModule,
     PatchDbModule,
+    ToastContainerModule,
+    ConnectionBarComponentModule,
   ],
   providers: APP_PROVIDERS,
   bootstrap: [AppComponent],

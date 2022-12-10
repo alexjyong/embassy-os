@@ -7,8 +7,10 @@ import {
 import { getErrorMessage } from '@start9labs/shared'
 import { BackupInfo } from 'src/app/services/api/api.types'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
+import { PatchDB } from 'patch-db-client'
 import { AppRecoverOption } from './to-options.pipe'
+import { DataModel } from 'src/app/services/patch-db/data-model'
+import { take } from 'rxjs'
 
 @Component({
   selector: 'app-recover-select',
@@ -21,7 +23,7 @@ export class AppRecoverSelectPage {
   @Input() password!: string
   @Input() oldPassword?: string
 
-  readonly packageData$ = this.patch.watch$('package-data')
+  readonly packageData$ = this.patch.watch$('package-data').pipe(take(1))
 
   hasSelection = false
   error: string | IonicSafeString = ''
@@ -30,7 +32,7 @@ export class AppRecoverSelectPage {
     private readonly modalCtrl: ModalController,
     private readonly loadingCtrl: LoadingController,
     private readonly embassyApi: ApiService,
-    private readonly patch: PatchDbService,
+    private readonly patch: PatchDB<DataModel>,
   ) {}
 
   dismiss() {

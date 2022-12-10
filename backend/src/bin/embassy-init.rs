@@ -1,83 +1,116 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use embassy::context::rpc::RpcContextConfig;
-use embassy::context::{DiagnosticContext, SetupContext};
+use embassy::context::{DiagnosticContext, InstallContext, SetupContext};
 use embassy::disk::fsck::RepairStrategy;
 use embassy::disk::main::DEFAULT_PASSWORD;
 use embassy::disk::REPAIR_DISK_PATH;
-use embassy::hostname::get_product_key;
 use embassy::init::STANDBY_MODE_PATH;
-use embassy::middleware::cors::cors;
-use embassy::middleware::diagnostic::diagnostic;
-use embassy::middleware::encrypt::encrypt;
+use embassy::net::embassy_service_http_server::EmbassyServiceHTTPServer;
 #[cfg(feature = "avahi")]
 use embassy::net::mdns::MdnsController;
+use embassy::net::net_utils::ResourceFqdn;
+use embassy::net::static_server::{
+    diag_ui_file_router, install_ui_file_router, setup_ui_file_router,
+};
 use embassy::shutdown::Shutdown;
 use embassy::sound::CHIME;
 use embassy::util::logger::EmbassyLogger;
 use embassy::util::Invoke;
 use embassy::{Error, ErrorKind, ResultExt};
-use http::StatusCode;
-use rpc_toolkit::rpc_server;
 use tokio::process::Command;
 use tracing::instrument;
 
-fn status_fn(_: i32) -> StatusCode {
-    StatusCode::OK
-}
-
 #[instrument]
-async fn setup_or_init(cfg_path: Option<&str>) -> Result<(), Error> {
-    if tokio::fs::metadata("/embassy-os/disk.guid").await.is_err() {
+async fn setup_or_init(cfg_path: Option<PathBuf>) -> Result<(), Error> {
+    if tokio::fs::metadata("/cdrom").await.is_ok() {
         #[cfg(feature = "avahi")]
-        let _mdns = MdnsController::init();
-        tokio::fs::write(
-            "/etc/nginx/sites-available/default",
-            include_str!("../nginx/setup-wizard.conf"),
-        )
-        .await
-        .with_ctx(|_| {
-            (
-                embassy::ErrorKind::Filesystem,
-                "/etc/nginx/sites-available/default",
-            )
-        })?;
-        Command::new("systemctl")
-            .arg("reload")
-            .arg("nginx")
-            .invoke(embassy::ErrorKind::Nginx)
+        let _mdns = MdnsController::init().await?;
+
+        let ctx = InstallContext::init(cfg_path).await?;
+
+        let embassy_ip_fqdn: ResourceFqdn = ResourceFqdn::IpAddr;
+        let embassy_fqdn: ResourceFqdn = "embassy.local".parse()?;
+
+        let localhost_fqdn = ResourceFqdn::LocalHost;
+
+        let install_ui_handler = install_ui_file_router(ctx.clone()).await?;
+
+        let mut install_http_server =
+            EmbassyServiceHTTPServer::new([0, 0, 0, 0].into(), 80, None).await?;
+        install_http_server
+            .add_svc_handler_mapping(embassy_ip_fqdn, install_ui_handler.clone())
             .await?;
-        let ctx = SetupContext::init(cfg_path).await?;
-        let keysource_ctx = ctx.clone();
-        let keysource = move || {
-            let ctx = keysource_ctx.clone();
-            async move { ctx.product_key().await }
-        };
-        let encrypt = encrypt(keysource);
+        install_http_server
+            .add_svc_handler_mapping(embassy_fqdn, install_ui_handler.clone())
+            .await?;
+
+        install_http_server
+            .add_svc_handler_mapping(localhost_fqdn, install_ui_handler.clone())
+            .await?;
+
         tokio::time::sleep(Duration::from_secs(1)).await; // let the record state that I hate this
         CHIME.play().await?;
-        rpc_server!({
-            command: embassy::setup_api,
-            context: ctx.clone(),
-            status: status_fn,
-            middleware: [
-                cors,
-                encrypt,
-            ]
-        })
-        .with_graceful_shutdown({
-            let mut shutdown = ctx.shutdown.subscribe();
-            async move {
-                shutdown.recv().await.expect("context dropped");
-            }
-        })
+
+        ctx.shutdown
+            .subscribe()
+            .recv()
+            .await
+            .expect("context dropped");
+        install_http_server.shutdown.send(()).unwrap();
+        Command::new("reboot")
+            .invoke(embassy::ErrorKind::Unknown)
+            .await?;
+    } else if tokio::fs::metadata("/media/embassy/config/disk.guid")
         .await
-        .with_kind(embassy::ErrorKind::Network)?;
+        .is_err()
+    {
+        #[cfg(feature = "avahi")]
+        let _mdns = MdnsController::init().await?;
+
+        let ctx = SetupContext::init(cfg_path).await?;
+
+        let embassy_ip_fqdn: ResourceFqdn = ResourceFqdn::IpAddr;
+        let embassy_fqdn: ResourceFqdn = "embassy.local".parse()?;
+        let localhost_fqdn = ResourceFqdn::LocalHost;
+
+        let setup_ui_handler = setup_ui_file_router(ctx.clone()).await?;
+
+        let mut setup_http_server =
+            EmbassyServiceHTTPServer::new([0, 0, 0, 0].into(), 80, None).await?;
+        setup_http_server
+            .add_svc_handler_mapping(embassy_ip_fqdn, setup_ui_handler.clone())
+            .await?;
+        setup_http_server
+            .add_svc_handler_mapping(embassy_fqdn, setup_ui_handler.clone())
+            .await?;
+
+        setup_http_server
+            .add_svc_handler_mapping(localhost_fqdn, setup_ui_handler.clone())
+            .await?;
+
+        tokio::time::sleep(Duration::from_secs(1)).await; // let the record state that I hate this
+        CHIME.play().await?;
+        ctx.shutdown
+            .subscribe()
+            .recv()
+            .await
+            .expect("context dropped");
+        setup_http_server.shutdown.send(()).unwrap();
+        tokio::task::yield_now().await;
+        if let Err(e) = Command::new("killall")
+            .arg("firefox-esr")
+            .invoke(ErrorKind::NotFound)
+            .await
+        {
+            tracing::error!("Failed to kill kiosk: {}", e);
+            tracing::debug!("{:?}", e);
+        }
     } else {
         let cfg = RpcContextConfig::load(cfg_path).await?;
-        let guid_string = tokio::fs::read_to_string("/embassy-os/disk.guid") // unique identifier for volume group - keeps track of the disk that goes with your embassy
+        let guid_string = tokio::fs::read_to_string("/media/embassy/config/disk.guid") // unique identifier for volume group - keeps track of the disk that goes with your embassy
             .await?;
         let guid = guid_string.trim();
         let requires_reboot = embassy::disk::main::import(
@@ -103,7 +136,7 @@ async fn setup_or_init(cfg_path: Option<&str>) -> Result<(), Error> {
                 .await?;
         }
         tracing::info!("Loaded Disk");
-        embassy::init::init(&cfg, &get_product_key().await?).await?;
+        embassy::init::init(&cfg).await?;
     }
 
     Ok(())
@@ -128,7 +161,7 @@ async fn run_script_if_exists<P: AsRef<Path>>(path: P) {
 }
 
 #[instrument]
-async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
+async fn inner_main(cfg_path: Option<PathBuf>) -> Result<Option<Shutdown>, Error> {
     if tokio::fs::metadata(STANDBY_MODE_PATH).await.is_ok() {
         tokio::fs::remove_file(STANDBY_MODE_PATH).await?;
         Command::new("sync").invoke(ErrorKind::Filesystem).await?;
@@ -138,36 +171,24 @@ async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
 
     embassy::sound::BEP.play().await?;
 
-    run_script_if_exists("/embassy-os/preinit.sh").await;
+    run_script_if_exists("/media/embassy/config/preinit.sh").await;
 
-    let res = if let Err(e) = setup_or_init(cfg_path).await {
-        async {
+    let res = if let Err(e) = setup_or_init(cfg_path.clone()).await {
+        async move {
             tracing::error!("{}", e.source);
             tracing::debug!("{}", e.source);
             embassy::sound::BEETHOVEN.play().await?;
             #[cfg(feature = "avahi")]
-            let _mdns = MdnsController::init();
-            tokio::fs::write(
-                "/etc/nginx/sites-available/default",
-                include_str!("../nginx/diagnostic-ui.conf"),
-            )
-            .await
-            .with_ctx(|_| {
-                (
-                    embassy::ErrorKind::Filesystem,
-                    "/etc/nginx/sites-available/default",
-                )
-            })?;
-            Command::new("systemctl")
-                .arg("reload")
-                .arg("nginx")
-                .invoke(embassy::ErrorKind::Nginx)
-                .await?;
+            let _mdns = MdnsController::init().await?;
+
             let ctx = DiagnosticContext::init(
                 cfg_path,
-                if tokio::fs::metadata("/embassy-os/disk.guid").await.is_ok() {
+                if tokio::fs::metadata("/media/embassy/config/disk.guid")
+                    .await
+                    .is_ok()
+                {
                     Some(Arc::new(
-                        tokio::fs::read_to_string("/embassy-os/disk.guid") // unique identifier for volume group - keeps track of the disk that goes with your embassy
+                        tokio::fs::read_to_string("/media/embassy/config/disk.guid") // unique identifier for volume group - keeps track of the disk that goes with your embassy
                             .await?
                             .trim()
                             .to_owned(),
@@ -178,44 +199,43 @@ async fn inner_main(cfg_path: Option<&str>) -> Result<Option<Shutdown>, Error> {
                 e,
             )
             .await?;
-            let mut shutdown_recv = ctx.shutdown.subscribe();
-            rpc_server!({
-                command: embassy::diagnostic_api,
-                context: ctx.clone(),
-                status: status_fn,
-                middleware: [
-                    cors,
-                    diagnostic,
-                ]
-            })
-            .with_graceful_shutdown({
-                let mut shutdown = ctx.shutdown.subscribe();
-                async move {
-                    shutdown.recv().await.expect("context dropped");
-                }
-            })
-            .await
-            .with_kind(embassy::ErrorKind::Network)?;
 
-            Ok::<_, Error>(
-                shutdown_recv
-                    .recv()
-                    .await
-                    .with_kind(embassy::ErrorKind::Network)?,
-            )
+            let embassy_ip_fqdn: ResourceFqdn = ResourceFqdn::IpAddr;
+            let embassy_fqdn: ResourceFqdn = "embassy.local".parse()?;
+
+            let localhost_fqdn = ResourceFqdn::LocalHost;
+
+            let diag_ui_handler = diag_ui_file_router(ctx.clone()).await?;
+
+            let mut diag_http_server =
+                EmbassyServiceHTTPServer::new([0, 0, 0, 0].into(), 80, None).await?;
+            diag_http_server
+                .add_svc_handler_mapping(embassy_ip_fqdn, diag_ui_handler.clone())
+                .await?;
+            diag_http_server
+                .add_svc_handler_mapping(embassy_fqdn, diag_ui_handler.clone())
+                .await?;
+
+            diag_http_server
+                .add_svc_handler_mapping(localhost_fqdn, diag_ui_handler.clone())
+                .await?;
+
+            let shutdown = ctx.shutdown.subscribe().recv().await.unwrap();
+            diag_http_server.shutdown.send(()).unwrap();
+            Ok(shutdown)
         }
         .await
     } else {
         Ok(None)
     };
 
-    run_script_if_exists("/embassy-os/postinit.sh").await;
+    run_script_if_exists("/media/embassy/config/postinit.sh").await;
 
     res
 }
 
 fn main() {
-    let matches = clap::App::new("embassyd")
+    let matches = clap::App::new("embassy-init")
         .arg(
             clap::Arg::with_name("config")
                 .short('c')
@@ -226,7 +246,7 @@ fn main() {
 
     EmbassyLogger::init();
 
-    let cfg_path = matches.value_of("config");
+    let cfg_path = matches.value_of("config").map(|p| Path::new(p).to_owned());
     let res = {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

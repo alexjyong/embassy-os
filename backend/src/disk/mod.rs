@@ -1,7 +1,11 @@
+use std::path::{Path, PathBuf};
+
 use clap::ArgMatches;
 use rpc_toolkit::command;
+use serde::{Deserialize, Serialize};
 
-use self::util::DiskListResponse;
+use crate::context::RpcContext;
+use crate::disk::util::DiskInfo;
 use crate::util::display_none;
 use crate::util::serde::{display_serializable, IoFormat};
 use crate::Error;
@@ -9,18 +13,29 @@ use crate::Error;
 pub mod fsck;
 pub mod main;
 pub mod mount;
-pub mod quirks;
 pub mod util;
 
 pub const BOOT_RW_PATH: &str = "/media/boot-rw";
-pub const REPAIR_DISK_PATH: &str = "/embassy-os/repair-disk";
+pub const REPAIR_DISK_PATH: &str = "/media/embassy/config/repair-disk";
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct OsPartitionInfo {
+    pub boot: PathBuf,
+    pub root: PathBuf,
+}
+impl OsPartitionInfo {
+    pub fn contains(&self, logicalname: impl AsRef<Path>) -> bool {
+        &*self.boot == logicalname.as_ref() || &*self.root == logicalname.as_ref()
+    }
+}
 
 #[command(subcommands(list, repair))]
 pub fn disk() -> Result<(), Error> {
     Ok(())
 }
 
-fn display_disk_info(info: DiskListResponse, matches: &ArgMatches) {
+fn display_disk_info(info: Vec<DiskInfo>, matches: &ArgMatches) {
     use prettytable::*;
 
     if matches.is_present("format") {
@@ -35,7 +50,7 @@ fn display_disk_info(info: DiskListResponse, matches: &ArgMatches) {
         "USED",
         "EMBASSY OS VERSION"
     ]);
-    for disk in info.disks {
+    for disk in info {
         let row = row![
             disk.logicalname.display(),
             "N/A",
@@ -71,16 +86,17 @@ fn display_disk_info(info: DiskListResponse, matches: &ArgMatches) {
             table.add_row(row);
         }
     }
-    table.print_tty(false);
+    table.print_tty(false).unwrap();
 }
 
 #[command(display(display_disk_info))]
 pub async fn list(
+    #[context] ctx: RpcContext,
     #[allow(unused_variables)]
     #[arg]
     format: Option<IoFormat>,
-) -> Result<DiskListResponse, Error> {
-    crate::disk::util::list().await
+) -> Result<Vec<DiskInfo>, Error> {
+    crate::disk::util::list(&ctx.os_partitions).await
 }
 
 #[command(display(display_none))]

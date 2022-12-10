@@ -1,19 +1,20 @@
 import { Pipe, PipeTransform } from '@angular/core'
 import {
+  DataModel,
   HealthCheckResult,
   PackageDataEntry,
   PackageMainStatus,
 } from 'src/app/services/patch-db/data-model'
-import { exists, isEmptyObject } from '@start9labs/shared'
-import { filter, map, startWith } from 'rxjs/operators'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
+import { isEmptyObject } from '@start9labs/shared'
+import { map, startWith } from 'rxjs/operators'
+import { PatchDB } from 'patch-db-client'
 import { Observable } from 'rxjs'
 
 @Pipe({
   name: 'toHealthChecks',
 })
 export class ToHealthChecksPipe implements PipeTransform {
-  constructor(private readonly patch: PatchDbService) {}
+  constructor(private readonly patch: PatchDB<DataModel>) {}
 
   transform(
     pkg: PackageDataEntry,
@@ -26,7 +27,6 @@ export class ToHealthChecksPipe implements PipeTransform {
     const healthChecks$ = this.patch
       .watch$('package-data', pkg.manifest.id, 'installed', 'status', 'main')
       .pipe(
-        filter(obj => exists(obj)),
         map(main => {
           // Question: is this ok or do we have to use Object.keys
           // to maintain order and the keys initially present in pkg?

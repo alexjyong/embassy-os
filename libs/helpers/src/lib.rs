@@ -7,10 +7,20 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use tokio::fs::File;
 use tokio::sync::oneshot;
-use tokio::task::{JoinError, JoinHandle};
+use tokio::task::{JoinError, JoinHandle, LocalSet};
 
+mod byte_replacement_reader;
+mod rpc_client;
+mod rsync;
 mod script_dir;
+pub use byte_replacement_reader::*;
+pub use rpc_client::RpcClient;
+pub use rsync::*;
 pub use script_dir::*;
+
+pub fn const_true() -> bool {
+    true
+}
 
 pub fn to_tmp_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     let path = path.as_ref();
@@ -207,4 +217,27 @@ impl<T: 'static + Send> TimedResource<T> {
     pub fn is_timed_out(&self) -> bool {
         self.ready.is_closed()
     }
+}
+
+pub async fn spawn_local<
+    T: 'static + Send,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = T> + 'static,
+>(
+    fut: F,
+) -> NonDetachingJoinHandle<T> {
+    let (send, recv) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let set = LocalSet::new();
+                send.send(set.spawn_local(fut()).into())
+                    .unwrap_or_else(|_| unreachable!());
+                set.await
+            })
+    });
+    recv.await.unwrap()
 }

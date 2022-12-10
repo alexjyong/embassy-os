@@ -1,13 +1,14 @@
 import { Component } from '@angular/core'
 import { ActivatedRoute } from '@angular/router'
 import { ModalController } from '@ionic/angular'
-import { debounce, exists, ErrorToastService } from '@start9labs/shared'
+import { debounce, ErrorToastService } from '@start9labs/shared'
 import * as yaml from 'js-yaml'
 import { filter, take } from 'rxjs/operators'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
+import { PatchDB } from 'patch-db-client'
 import { getProjectId } from 'src/app/util/get-project-id'
 import { GenericFormPage } from '../../../modals/generic-form/generic-form.page'
+import { DataModel } from 'src/app/services/patch-db/data-model'
 
 @Component({
   selector: 'dev-config',
@@ -24,14 +25,14 @@ export class DevConfigPage {
     private readonly route: ActivatedRoute,
     private readonly errToast: ErrorToastService,
     private readonly modalCtrl: ModalController,
-    private readonly patchDb: PatchDbService,
+    private readonly patch: PatchDB<DataModel>,
     private readonly api: ApiService,
   ) {}
 
   ngOnInit() {
-    this.patchDb
+    this.patch
       .watch$('ui', 'dev', this.projectId, 'config')
-      .pipe(filter(exists), take(1))
+      .pipe(filter(Boolean), take(1))
       .subscribe(config => {
         this.code = config
       })
@@ -68,10 +69,10 @@ export class DevConfigPage {
   async save() {
     this.saving = true
     try {
-      await this.api.setDbValue({
-        pointer: `/dev/${this.projectId}/config`,
-        value: this.code,
-      })
+      await this.api.setDbValue<string>(
+        ['dev', this.projectId, 'config'],
+        this.code,
+      )
     } catch (e: any) {
       this.errToast.present(e)
     } finally {

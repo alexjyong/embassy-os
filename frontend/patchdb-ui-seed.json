@@ -1,0 +1,17 @@
+{
+  "name": null,
+  "ack-welcome": "0.3.3",
+  "marketplace": {
+    "selected-url": "https://registry.start9.com/",
+    "known-hosts": {
+      "https://registry.start9.com/": {}
+    }
+  },
+  "dev": {},
+  "gaming": {
+    "snake": {
+      "high-score": 0
+    }
+  },
+  "ack-instructions": {}
+}

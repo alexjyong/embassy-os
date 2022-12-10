@@ -1,21 +1,29 @@
-import { Component } from '@angular/core'
+import { Component, Inject } from '@angular/core'
 import {
   AlertController,
   LoadingController,
   NavController,
   ModalController,
+  ToastController,
 } from '@ionic/angular'
 import { ApiService } from 'src/app/services/api/embassy-api.service'
 import { ActivatedRoute } from '@angular/router'
-import { PatchDbService } from 'src/app/services/patch-db/patch-db.service'
-import { Observable, of } from 'rxjs'
-import { filter, take } from 'rxjs/operators'
-import { exists, isEmptyObject, ErrorToastService } from '@start9labs/shared'
+import { PatchDB } from 'patch-db-client'
+import { ServerNameService } from 'src/app/services/server-name.service'
+import { combineLatest, firstValueFrom, map, Observable, of } from 'rxjs'
+import { ErrorToastService } from '@start9labs/shared'
 import { EOSService } from 'src/app/services/eos.service'
-import { LocalStorageService } from 'src/app/services/local-storage.service'
-import { RecoveredPackageDataEntry } from 'src/app/services/patch-db/data-model'
+import { ClientStorageService } from 'src/app/services/client-storage.service'
 import { OSUpdatePage } from 'src/app/modals/os-update/os-update.page'
 import { getAllPackages } from '../../../util/get-package-data'
+import { AuthService } from 'src/app/services/auth.service'
+import { DataModel } from 'src/app/services/patch-db/data-model'
+import {
+  GenericInputComponent,
+  GenericInputOptions,
+} from 'src/app/modals/generic-input/generic-input.component'
+import { ConfigService } from 'src/app/services/config.service'
+import { DOCUMENT } from '@angular/common'
 
 @Component({
   selector: 'server-show',
@@ -23,14 +31,14 @@ import { getAllPackages } from '../../../util/get-package-data'
   styleUrls: ['server-show.page.scss'],
 })
 export class ServerShowPage {
-  hasRecoveredPackage = false
-  clicks = 0
+  manageClicks = 0
+  powerClicks = 0
 
   readonly server$ = this.patch.watch$('server-info')
-  readonly ui$ = this.patch.watch$('ui')
-  readonly connected$ = this.patch.connected$
   readonly showUpdate$ = this.eosService.showUpdate$
-  readonly showDiskRepair$ = this.localStorageService.showDiskRepair$
+  readonly showDiskRepair$ = this.ClientStorageService.showDiskRepair$
+
+  readonly secure = this.config.isSecure()
 
   constructor(
     private readonly alertCtrl: AlertController,
@@ -40,38 +48,67 @@ export class ServerShowPage {
     private readonly embassyApi: ApiService,
     private readonly navCtrl: NavController,
     private readonly route: ActivatedRoute,
-    private readonly patch: PatchDbService,
+    private readonly patch: PatchDB<DataModel>,
     private readonly eosService: EOSService,
-    private readonly localStorageService: LocalStorageService,
+    private readonly ClientStorageService: ClientStorageService,
+    private readonly serverNameService: ServerNameService,
+    private readonly authService: AuthService,
+    private readonly toastCtrl: ToastController,
+    private readonly config: ConfigService,
+    @Inject(DOCUMENT) private readonly document: Document,
   ) {}
 
-  ngOnInit() {
-    this.patch
-      .watch$('recovered-packages')
-      .pipe(filter(exists), take(1))
-      .subscribe((rps: { [id: string]: RecoveredPackageDataEntry }) => {
-        this.hasRecoveredPackage = !isEmptyObject(rps)
-      })
+  async presentModalName(): Promise<void> {
+    const name = await firstValueFrom(this.serverNameService.name$)
+
+    const options: GenericInputOptions = {
+      title: 'Set Device Name',
+      message: 'This will be displayed in your browser tab',
+      label: 'Device Name',
+      useMask: false,
+      placeholder: name.default,
+      nullable: true,
+      initialValue: name.current,
+      buttonText: 'Save',
+      submitFn: (value: string) =>
+        this.setDbValue('name', value || name.default),
+    }
+
+    const modal = await this.modalCtrl.create({
+      componentProps: { options },
+      cssClass: 'alertlike-modal',
+      presentingElement: await this.modalCtrl.getTop(),
+      component: GenericInputComponent,
+    })
+
+    await modal.present()
   }
 
   async updateEos(): Promise<void> {
-    if (this.hasRecoveredPackage) {
-      const alert = await this.alertCtrl.create({
-        header: 'Cannot Update',
-        message:
-          'You cannot update EmbassyOS when you have unresolved recovered services.',
-        buttons: ['OK'],
-      })
-      await alert.present()
-    } else {
-      const modal = await this.modalCtrl.create({
-        componentProps: {
-          releaseNotes: this.eosService.eos?.['release-notes'],
+    const modal = await this.modalCtrl.create({
+      component: OSUpdatePage,
+    })
+    modal.present()
+  }
+
+  async presentAlertLogout() {
+    const alert = await this.alertCtrl.create({
+      header: 'Confirm',
+      message: 'Are you sure you want to log out?',
+      buttons: [
+        {
+          text: 'Cancel',
+          role: 'cancel',
         },
-        component: OSUpdatePage,
-      })
-      modal.present()
-    }
+        {
+          text: 'Logout',
+          handler: () => this.logout(),
+          cssClass: 'enter-click',
+        },
+      ],
+    })
+
+    await alert.present()
   }
 
   async presentAlertRestart() {
@@ -146,7 +183,7 @@ export class ServerShowPage {
   async presentAlertRepairDisk() {
     const alert = await this.alertCtrl.create({
       header: 'Warning',
-      message: `<p>This action will attempt to preform a disk repair operation and system reboot. No data will be deleted. This action should only be executed if directed by a Start9 support specialist. We recommend backing up your device before preforming this action.</p><p>If anything happens to the device during the reboot (between the bep and chime), such as loosing power, a power surge, unplugging the drive, or unplugging the Embassy, the filesystem <i>will</i> be in an unrecoverable state. Please proceed with caution.</p>`,
+      message: `<p>This action will attempt to preform a disk repair operation and system reboot. No data will be deleted. This action should only be executed if directed by a Start9 support specialist. We recommend backing up your device before preforming this action.</p><p>If anything happens to the device during the reboot, such as losing power, a power surge, unplugging the drive, or unplugging the Embassy, the filesystem <i>will</i> be in an unrecoverable state. Please proceed with caution.</p>`,
       buttons: [
         {
           text: 'Cancel',
@@ -169,6 +206,42 @@ export class ServerShowPage {
       cssClass: 'alert-warning-message',
     })
     await alert.present()
+  }
+
+  launchHttps() {
+    window.open(this.document.location.href.replace('http', 'https'))
+  }
+
+  addClick(title: string) {
+    switch (title) {
+      case 'Manage':
+        this.addManageClick()
+        break
+      case 'Power':
+        this.addPowerClick()
+        break
+      default:
+        return
+    }
+  }
+
+  private async setDbValue(key: string, value: string): Promise<void> {
+    const loader = await this.loadingCtrl.create({
+      message: 'Saving...',
+    })
+    await loader.present()
+
+    try {
+      await this.embassyApi.setDbValue<string>([key], value)
+    } finally {
+      loader.dismiss()
+    }
+  }
+
+  // should wipe cache independent of actual BE logout
+  private logout() {
+    this.embassyApi.logout({}).catch(e => console.error('Failed to log out', e))
+    this.authService.setUnverified()
   }
 
   private async restart() {
@@ -235,11 +308,11 @@ export class ServerShowPage {
     await loader.present()
 
     try {
-      const updateAvailable = await this.eosService.getEOS()
+      await this.eosService.loadEos()
 
       await loader.dismiss()
 
-      if (updateAvailable) {
+      if (this.eosService.updateAvailable$.value) {
         this.updateEos()
       } else {
         this.presentAlertLatest()
@@ -253,7 +326,7 @@ export class ServerShowPage {
   private async presentAlertLatest() {
     const alert = await this.alertCtrl.create({
       header: 'Up to date!',
-      message: 'You are on the latest version of EmbassyOS.',
+      message: 'You are on the latest version of embassyOS.',
       buttons: [
         {
           text: 'OK',
@@ -269,7 +342,7 @@ export class ServerShowPage {
   private async presentAlertInProgress(verb: string, message: string) {
     const alert = await this.alertCtrl.create({
       header: `${verb} In Progress...`,
-      message: `Stopping all services gracefully. This can take a while.<br /><br />Your Embassy will then <b>♫ play a melody ♫</b> and become unreachable${message}`,
+      message: `Stopping all services gracefully. This can take a while.<br /><br />If you have a speaker, your Embassy will <b>♫ play a melody ♫</b> before shutting down. Your Embassy will then become unreachable${message}`,
       buttons: [
         {
           text: 'OK',
@@ -285,63 +358,64 @@ export class ServerShowPage {
     Backups: [
       {
         title: 'Create Backup',
-        description: 'Back up your Embassy and all its services',
-        icon: 'save-outline',
+        description: 'Back up your Embassy and service data',
+        icon: 'duplicate-outline',
         action: () =>
           this.navCtrl.navigateForward(['backup'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(!this.secure),
       },
       {
         title: 'Restore From Backup',
-        description: 'Restore one or more services from a prior backup',
+        description: 'Restore one or more services from backup',
         icon: 'color-wand-outline',
         action: () =>
           this.navCtrl.navigateForward(['restore'], { relativeTo: this.route }),
         detail: true,
-        disabled: this.eosService.updatingOrBackingUp$,
+        disabled$: combineLatest([
+          this.eosService.updatingOrBackingUp$,
+          of(this.secure),
+        ]).pipe(map(([updating, secure]) => updating || !secure)),
       },
     ],
-    Settings: [
+    Manage: [
       {
         title: 'Software Update',
-        description: 'Get the latest version of EmbassyOS',
-        icon: 'cog-outline',
+        description: 'Get the latest version of embassyOS',
+        icon: 'cloud-download-outline',
         action: () =>
           this.eosService.updateAvailable$.getValue()
             ? this.updateEos()
             : this.checkForEosUpdate(),
         detail: false,
-        disabled: this.eosService.updatingOrBackingUp$,
+        disabled$: this.eosService.updatingOrBackingUp$,
       },
       {
-        title: 'Preferences',
-        description: 'Device name, background tasks',
-        icon: 'options-outline',
-        action: () =>
-          this.navCtrl.navigateForward(['preferences'], {
-            relativeTo: this.route,
-          }),
-        detail: true,
-        disabled: of(false),
+        title: 'Set Device Name',
+        description: 'Give your device a name for easy identification',
+        icon: 'pricetag-outline',
+        action: () => this.presentModalName(),
+        detail: false,
+        disabled$: of(false),
       },
       {
         title: 'LAN',
-        description: 'Access your Embassy on the Local Area Network',
+        description: `Download and trust your Embassy's certificate for a secure local connection`,
         icon: 'home-outline',
         action: () =>
           this.navCtrl.navigateForward(['lan'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'SSH',
-        description: 'Access your Embassy from the command line',
+        description:
+          'Manage your SSH keys to access your Embassy from the command line',
         icon: 'terminal-outline',
         action: () =>
           this.navCtrl.navigateForward(['ssh'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'WiFi',
@@ -350,7 +424,7 @@ export class ServerShowPage {
         action: () =>
           this.navCtrl.navigateForward(['wifi'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Sideload Service',
@@ -361,18 +435,7 @@ export class ServerShowPage {
             relativeTo: this.route,
           }),
         detail: true,
-        disabled: of(false),
-      },
-      {
-        title: 'Marketplace Settings',
-        description: 'Add or remove marketplaces',
-        icon: 'storefront-outline',
-        action: () =>
-          this.navCtrl.navigateForward(['marketplaces'], {
-            relativeTo: this.route,
-          }),
-        detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
     ],
     Insights: [
@@ -383,7 +446,7 @@ export class ServerShowPage {
         action: () =>
           this.navCtrl.navigateForward(['specs'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Monitor',
@@ -392,7 +455,7 @@ export class ServerShowPage {
         action: () =>
           this.navCtrl.navigateForward(['metrics'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Active Sessions',
@@ -403,7 +466,7 @@ export class ServerShowPage {
             relativeTo: this.route,
           }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'OS Logs',
@@ -412,7 +475,7 @@ export class ServerShowPage {
         action: () =>
           this.navCtrl.navigateForward(['logs'], { relativeTo: this.route }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Kernel Logs',
@@ -424,22 +487,22 @@ export class ServerShowPage {
             relativeTo: this.route,
           }),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
     ],
     Support: [
       {
         title: 'User Manual',
-        description: 'View the Embassy user manual and FAQ',
+        description: 'Discover what your Embassy can do',
         icon: 'map-outline',
         action: () =>
           window.open(
-            'https://start9.com/latest/user-manual/',
+            'https://docs.start9.com/latest/user-manual',
             '_blank',
             'noreferrer',
           ),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Contact Support',
@@ -447,22 +510,30 @@ export class ServerShowPage {
         icon: 'chatbubbles-outline',
         action: () =>
           window.open(
-            'https://start9.com/latest/support/contact/',
+            'https://docs.start9.com/latest/support/contact',
             '_blank',
             'noreferrer',
           ),
         detail: true,
-        disabled: of(false),
+        disabled$: of(false),
       },
     ],
     Power: [
+      {
+        title: 'Log Out',
+        description: '',
+        icon: 'log-out-outline',
+        action: () => this.presentAlertLogout(),
+        detail: false,
+        disabled$: of(false),
+      },
       {
         title: 'Restart',
         description: '',
         icon: 'reload',
         action: () => this.presentAlertRestart(),
         detail: false,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Shutdown',
@@ -470,7 +541,7 @@ export class ServerShowPage {
         icon: 'power',
         action: () => this.presentAlertShutdown(),
         detail: false,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'System Rebuild',
@@ -478,7 +549,7 @@ export class ServerShowPage {
         icon: 'construct-outline',
         action: () => this.presentAlertSystemRebuild(),
         detail: false,
-        disabled: of(false),
+        disabled$: of(false),
       },
       {
         title: 'Repair Disk',
@@ -486,24 +557,36 @@ export class ServerShowPage {
         icon: 'medkit-outline',
         action: () => this.presentAlertRepairDisk(),
         detail: false,
-        disabled: of(false),
+        disabled$: of(false),
       },
     ],
   }
 
-  asIsOrder() {
-    return 0
+  private async addManageClick() {
+    this.manageClicks++
+    if (this.manageClicks === 5) {
+      this.manageClicks = 0
+      const newVal = this.ClientStorageService.toggleShowDevTools()
+      const toast = await this.toastCtrl.create({
+        header: newVal ? 'Dev tools unlocked' : 'Dev tools hidden',
+        position: 'bottom',
+        duration: 1000,
+      })
+
+      await toast.present()
+    }
   }
 
-  async addClick() {
-    this.clicks++
-    if (this.clicks >= 5) {
-      this.clicks = 0
-      const newVal = await this.localStorageService.toggleShowDiskRepair()
+  private addPowerClick() {
+    this.powerClicks++
+    if (this.powerClicks === 5) {
+      this.powerClicks = 0
+      this.ClientStorageService.toggleShowDiskRepair()
     }
-    setTimeout(() => {
-      this.clicks = Math.max(this.clicks - 1, 0)
-    }, 10000)
+  }
+
+  asIsOrder() {
+    return 0
   }
 }
 
@@ -517,5 +600,5 @@ interface SettingBtn {
   icon: string
   action: Function
   detail: boolean
-  disabled: Observable<boolean>
+  disabled$: Observable<boolean>
 }

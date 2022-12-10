@@ -10,6 +10,7 @@ use tracing::instrument;
 
 use crate::context::RpcContext;
 use crate::id::ImageId;
+use crate::procedure::docker::DockerContainers;
 use crate::procedure::{PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::util::Version;
@@ -26,13 +27,14 @@ impl Migrations {
     #[instrument]
     pub fn validate(
         &self,
+        container: &Option<DockerContainers>,
         eos_version: &Version,
         volumes: &Volumes,
         image_ids: &BTreeSet<ImageId>,
     ) -> Result<(), Error> {
         for (version, migration) in &self.from {
             migration
-                .validate(eos_version, volumes, image_ids, true)
+                .validate(container, eos_version, volumes, image_ids, true)
                 .with_ctx(|_| {
                     (
                         crate::ErrorKind::ValidateS9pk,
@@ -42,7 +44,7 @@ impl Migrations {
         }
         for (version, migration) in &self.to {
             migration
-                .validate(eos_version, volumes, image_ids, true)
+                .validate(container, eos_version, volumes, image_ids, true)
                 .with_ctx(|_| {
                     (
                         crate::ErrorKind::ValidateS9pk,
@@ -56,6 +58,7 @@ impl Migrations {
     #[instrument(skip(ctx))]
     pub fn from<'a>(
         &'a self,
+        container: &'a Option<DockerContainers>,
         ctx: &'a RpcContext,
         version: &'a Version,
         pkg_id: &'a PackageId,
@@ -67,7 +70,7 @@ impl Migrations {
             .iter()
             .find(|(range, _)| version.satisfies(*range))
         {
-            Some(
+            Some(async move {
                 migration
                     .execute(
                         ctx,
@@ -76,7 +79,6 @@ impl Migrations {
                         ProcedureName::Migration, // Migrations cannot be executed concurrently
                         volumes,
                         Some(version),
-                        false,
                         None,
                     )
                     .map(|r| {
@@ -85,8 +87,9 @@ impl Migrations {
                                 Error::new(eyre!("{}", e.1), crate::ErrorKind::MigrationFailed)
                             })
                         })
-                    }),
-            )
+                    })
+                    .await
+            })
         } else {
             None
         }
@@ -102,7 +105,7 @@ impl Migrations {
         volumes: &'a Volumes,
     ) -> Option<impl Future<Output = Result<MigrationRes, Error>> + 'a> {
         if let Some((_, migration)) = self.to.iter().find(|(range, _)| version.satisfies(*range)) {
-            Some(
+            Some(async move {
                 migration
                     .execute(
                         ctx,
@@ -111,7 +114,6 @@ impl Migrations {
                         ProcedureName::Migration,
                         volumes,
                         Some(version),
-                        false,
                         None,
                     )
                     .map(|r| {
@@ -120,8 +122,9 @@ impl Migrations {
                                 Error::new(eyre!("{}", e.1), crate::ErrorKind::MigrationFailed)
                             })
                         })
-                    }),
-            )
+                    })
+                    .await
+            })
         } else {
             None
         }

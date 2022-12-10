@@ -1,5 +1,5 @@
 import { Dump, Revision } from 'patch-db-client'
-import { MarketplaceData, MarketplacePkg } from '@start9labs/marketplace'
+import { MarketplacePkg, StoreInfo } from '@start9labs/marketplace'
 import { PackagePropertiesVersioned } from 'src/app/util/properties.util'
 import { ConfigSpec } from 'src/app/pkg-config/config-types'
 import {
@@ -7,7 +7,7 @@ import {
   DependencyError,
   Manifest,
 } from 'src/app/services/patch-db/data-model'
-import { LogsRes, ServerLogsReq } from '@start9labs/shared'
+import { EmbassyOSDiskInfo, LogsRes, ServerLogsReq } from '@start9labs/shared'
 
 export module RR {
   // DB
@@ -16,18 +16,24 @@ export module RR {
 
   export type GetDumpRes = Dump<DataModel>
 
-  export type SetDBValueReq = WithExpire<{ pointer: string; value: any }> // db.put.ui
-  export type SetDBValueRes = WithRevision<null>
+  export type SetDBValueReq<T> = { pointer: string; value: T } // db.put.ui
+  export type SetDBValueRes = null
 
   // auth
 
-  export type LoginReq = { password: string; metadata: SessionMetadata } // auth.login - unauthed
+  export type LoginReq = {
+    password: Encrypted | string
+    metadata: SessionMetadata
+  } // auth.login - unauthed
   export type loginRes = null
 
   export type LogoutReq = {} // auth.logout
   export type LogoutRes = null
 
   // server
+
+  export type EchoReq = { message: string } // server.echo
+  export type EchoRes = string
 
   export type GetServerLogsReq = ServerLogsReq // server.logs & server.kernel-logs
   export type GetServerLogsRes = LogsRes
@@ -41,8 +47,8 @@ export module RR {
   export type GetServerMetricsReq = {} // server.metrics
   export type GetServerMetricsRes = Metrics
 
-  export type UpdateServerReq = WithExpire<{ 'marketplace-url': string }> // server.update
-  export type UpdateServerRes = WithRevision<'updating' | 'no-updates'>
+  export type UpdateServerReq = { 'marketplace-url': string } // server.update
+  export type UpdateServerRes = 'updating' | 'no-updates'
 
   export type RestartServerReq = {} // server.restart
   export type RestartServerRes = null
@@ -61,8 +67,8 @@ export module RR {
     sessions: { [hash: string]: Session }
   }
 
-  export type KillSessionsReq = WithExpire<{ ids: string[] }> // sessions.kill
-  export type KillSessionsRes = WithRevision<null>
+  export type KillSessionsReq = { ids: string[] } // sessions.kill
+  export type KillSessionsRes = null
 
   // password
 
@@ -71,11 +77,11 @@ export module RR {
 
   // notification
 
-  export type GetNotificationsReq = WithExpire<{
+  export type GetNotificationsReq = {
     before?: number
     limit?: number
-  }> // notification.list
-  export type GetNotificationsRes = WithRevision<ServerNotification<number>[]>
+  } // notification.list
+  export type GetNotificationsRes = ServerNotification<number>[]
 
   export type DeleteNotificationReq = { id: number } // notification.delete
   export type DeleteNotificationRes = null
@@ -93,8 +99,8 @@ export module RR {
     ssids: {
       [ssid: string]: number
     }
-    connected?: string
-    country: string
+    connected: string | null
+    country: string | null
     ethernet: boolean
     'available-wifi': AvailableWifi[]
   }
@@ -148,14 +154,14 @@ export module RR {
   export type GetBackupInfoReq = { 'target-id': string; password: string } // backup.target.info
   export type GetBackupInfoRes = BackupInfo
 
-  export type CreateBackupReq = WithExpire<{
+  export type CreateBackupReq = {
     // backup.create
     'target-id': string
     'package-ids': string[]
     'old-password': string | null
     password: string
-  }>
-  export type CreateBackupRes = WithRevision<null>
+  }
+  export type CreateBackupRes = null
 
   // package
 
@@ -172,13 +178,13 @@ export module RR {
   export type GetPackageMetricsReq = { id: string } // package.metrics
   export type GetPackageMetricsRes = Metric
 
-  export type InstallPackageReq = WithExpire<{
+  export type InstallPackageReq = {
     id: string
     'version-spec'?: string
     'version-priority'?: 'min' | 'max'
     'marketplace-url': string
-  }> // package.install
-  export type InstallPackageRes = WithRevision<null>
+  } // package.install
+  export type InstallPackageRes = null
 
   export type DryUpdatePackageReq = { id: string; version: string } // package.update.dry
   export type DryUpdatePackageRes = Breakages
@@ -189,17 +195,17 @@ export module RR {
   export type DrySetPackageConfigReq = { id: string; config: object } // package.config.set.dry
   export type DrySetPackageConfigRes = Breakages
 
-  export type SetPackageConfigReq = WithExpire<DrySetPackageConfigReq> // package.config.set
-  export type SetPackageConfigRes = WithRevision<null>
+  export type SetPackageConfigReq = DrySetPackageConfigReq // package.config.set
+  export type SetPackageConfigRes = null
 
-  export type RestorePackagesReq = WithExpire<{
+  export type RestorePackagesReq = {
     // package.backup.restore
     ids: string[]
     'target-id': string
     'old-password': string | null
     password: string
-  }>
-  export type RestorePackagesRes = WithRevision<null>
+  }
+  export type RestorePackagesRes = null
 
   export type ExecutePackageActionReq = {
     id: string
@@ -208,20 +214,17 @@ export module RR {
   } // package.action
   export type ExecutePackageActionRes = ActionResponse
 
-  export type StartPackageReq = WithExpire<{ id: string }> // package.start
-  export type StartPackageRes = WithRevision<null>
+  export type StartPackageReq = { id: string } // package.start
+  export type StartPackageRes = null
 
-  export type RestartPackageReq = WithExpire<{ id: string }> // package.restart
-  export type RestartPackageRes = WithRevision<null>
+  export type RestartPackageReq = { id: string } // package.restart
+  export type RestartPackageRes = null
 
-  export type StopPackageReq = WithExpire<{ id: string }> // package.stop
-  export type StopPackageRes = WithRevision<null>
+  export type StopPackageReq = { id: string } // package.stop
+  export type StopPackageRes = null
 
-  export type UninstallPackageReq = WithExpire<{ id: string }> // package.uninstall
-  export type UninstallPackageRes = WithRevision<null>
-
-  export type DeleteRecoveredPackageReq = { id: string } // package.delete-recovered
-  export type DeleteRecoveredPackageRes = WithRevision<null>
+  export type UninstallPackageReq = { id: string } // package.uninstall
+  export type UninstallPackageRes = null
 
   export type DryConfigureDependencyReq = {
     'dependency-id': string
@@ -241,14 +244,15 @@ export module RR {
 
   // marketplace
 
-  export type GetMarketplaceDataReq = { 'server-id': string }
-  export type GetMarketplaceDataRes = MarketplaceData
-
-  export type GetMarketplaceEOSReq = {
+  export type EnvInfo = {
     'server-id': string
     'eos-version': string
   }
-  export type GetMarketplaceEOSRes = MarketplaceEOS
+  export type GetMarketplaceInfoReq = EnvInfo
+  export type GetMarketplaceInfoRes = StoreInfo
+
+  export type GetMarketplaceEosReq = EnvInfo
+  export type GetMarketplaceEosRes = MarketplaceEOS
 
   export type GetMarketplacePackagesReq = {
     ids?: { id: string; version: string }[]
@@ -264,9 +268,6 @@ export module RR {
   export type GetReleaseNotesReq = { id: string }
   export type GetReleaseNotesRes = { [version: string]: string }
 }
-
-export type WithExpire<T> = { 'expire-id'?: string } & T
-export type WithRevision<T> = { response: T | null; revision?: Revision }
 
 export interface MarketplaceEOS {
   version: string
@@ -335,13 +336,6 @@ export type PlatformType =
 
 export type BackupTarget = DiskBackupTarget | CifsBackupTarget
 
-export interface EmbassyOSRecoveryInfo {
-  version: string
-  full: boolean
-  'password-hash': string | null
-  'wrapped-key': string | null
-}
-
 export interface DiskBackupTarget {
   type: 'disk'
   vendor: string | null
@@ -350,7 +344,7 @@ export interface DiskBackupTarget {
   label: string | null
   capacity: number
   used: number | null
-  'embassy-os': EmbassyOSRecoveryInfo | null
+  'embassy-os': EmbassyOSDiskInfo | null
 }
 
 export interface CifsBackupTarget {
@@ -359,7 +353,7 @@ export interface CifsBackupTarget {
   path: string
   username: string
   mountable: boolean
-  'embassy-os': EmbassyOSRecoveryInfo | null
+  'embassy-os': EmbassyOSDiskInfo | null
 }
 
 export type RecoverySource = DiskRecoverySource | CifsRecoverySource
@@ -375,28 +369,6 @@ export interface CifsRecoverySource {
   path: string
   username: string
   password: string
-}
-
-export interface DiskInfo {
-  logicalname: string
-  vendor: string | null
-  model: string | null
-  partitions: PartitionInfo[]
-  capacity: number
-  guid: string | null
-}
-
-export interface PartitionInfo {
-  logicalname: string
-  label: string | null
-  capacity: number
-  used: number | null
-  'embassy-os': EmbassyOsDiskInfo | null
-}
-
-export interface EmbassyOsDiskInfo {
-  version: string
-  full: boolean
 }
 
 export interface BackupInfo {
@@ -482,4 +454,8 @@ declare global {
     ): string & Stringified<T>
     parse<T>(text: Stringified<T>, reviver?: (key: any, value: any) => any): T
   }
+}
+
+export type Encrypted = {
+  encrypted: string
 }

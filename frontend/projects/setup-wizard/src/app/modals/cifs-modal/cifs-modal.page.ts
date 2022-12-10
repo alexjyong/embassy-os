@@ -4,11 +4,8 @@ import {
   LoadingController,
   ModalController,
 } from '@ionic/angular'
-import {
-  ApiService,
-  CifsBackupTarget,
-  EmbassyOSRecoveryInfo,
-} from 'src/app/services/api/api.service'
+import { ApiService, CifsBackupTarget } from 'src/app/services/api/api.service'
+import { EmbassyOSDiskInfo } from '@start9labs/shared'
 import { PasswordPage } from '../password/password.page'
 
 @Component({
@@ -27,7 +24,7 @@ export class CifsModal {
 
   constructor(
     private readonly modalController: ModalController,
-    private readonly apiService: ApiService,
+    private readonly api: ApiService,
     private readonly loadingCtrl: LoadingController,
     private readonly alertCtrl: AlertController,
   ) {}
@@ -44,22 +41,16 @@ export class CifsModal {
     await loader.present()
 
     try {
-      const embassyOS = await this.apiService.verifyCifs(this.cifs)
+      const embassyOS = await this.api.verifyCifs({
+        ...this.cifs,
+        password: this.cifs.password
+          ? await this.api.encrypt(this.cifs.password)
+          : null,
+      })
 
       await loader.dismiss()
 
-      const is02x = embassyOS.version.startsWith('0.2')
-
-      if (is02x) {
-        this.modalController.dismiss(
-          {
-            cifs: this.cifs,
-          },
-          'success',
-        )
-      } else {
-        this.presentModalPassword(embassyOS)
-      }
+      this.presentModalPassword(embassyOS)
     } catch (e) {
       await loader.dismiss()
       this.presentAlertFailed()
@@ -67,7 +58,7 @@ export class CifsModal {
   }
 
   private async presentModalPassword(
-    embassyOS: EmbassyOSRecoveryInfo,
+    embassyOS: EmbassyOSDiskInfo,
   ): Promise<void> {
     const target: CifsBackupTarget = {
       ...this.cifs,
@@ -78,7 +69,6 @@ export class CifsModal {
     const modal = await this.modalController.create({
       component: PasswordPage,
       componentProps: { target },
-      cssClass: 'alertlike-modal',
     })
     modal.onDidDismiss().then(res => {
       if (res.role === 'success') {

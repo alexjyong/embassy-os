@@ -1,16 +1,21 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
+use color_eyre::eyre::eyre;
+use embassy_container_init::{ProcessGroupId, SignalGroup, SignalGroupParams};
+use helpers::RpcClient;
 pub use js_engine::JsError;
 use js_engine::{JsExecutionEnvironment, PathForVolumeId};
-use models::VolumeId;
+use models::{ErrorKind, VolumeId};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use super::ProcedureName;
 use crate::context::RpcContext;
 use crate::s9pk::manifest::PackageId;
-use crate::util::Version;
+use crate::util::{GeneralGuard, Version};
 use crate::volume::Volumes;
 use crate::Error;
 
@@ -40,7 +45,7 @@ impl PathForVolumeId for Volumes {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct JsProcedure {
     #[serde(default)]
@@ -52,8 +57,8 @@ impl JsProcedure {
         Ok(())
     }
 
-    #[instrument(skip(directory, input))]
-    pub async fn execute<I: Serialize, O: for<'de> Deserialize<'de>>(
+    #[instrument(skip(directory, input, rpc_client))]
+    pub async fn execute<I: Serialize, O: DeserializeOwned>(
         &self,
         directory: &PathBuf,
         pkg_id: &PackageId,
@@ -62,13 +67,32 @@ impl JsProcedure {
         volumes: &Volumes,
         input: Option<I>,
         timeout: Option<Duration>,
+        gid: ProcessGroupId,
+        rpc_client: Option<Arc<RpcClient>>,
     ) -> Result<Result<O, (i32, String)>, Error> {
-        Ok(async move {
+        let cleaner_client = rpc_client.clone();
+        let cleaner = GeneralGuard::new(move || {
+            tokio::spawn(async move {
+                if let Some(client) = cleaner_client {
+                    client
+                        .request(SignalGroup, SignalGroupParams { gid, signal: 9 })
+                        .await
+                        .map_err(|e| {
+                            Error::new(eyre!("{}: {:?}", e.message, e.data), ErrorKind::Docker)
+                        })
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        let res = async move {
             let running_action = JsExecutionEnvironment::load_from_package(
                 directory,
                 pkg_id,
                 pkg_version,
                 Box::new(volumes.clone()),
+                gid,
+                rpc_client,
             )
             .await?
             .run_action(name, input, self.args.clone());
@@ -82,11 +106,13 @@ impl JsProcedure {
             Ok(output)
         }
         .await
-        .map_err(|(error, message)| (error.as_code_num(), message)))
+        .map_err(|(error, message)| (error.as_code_num(), message));
+        cleaner.drop().await.unwrap()?;
+        Ok(res)
     }
 
     #[instrument(skip(ctx, input))]
-    pub async fn sandboxed<I: Serialize, O: for<'de> Deserialize<'de>>(
+    pub async fn sandboxed<I: Serialize, O: DeserializeOwned>(
         &self,
         ctx: &RpcContext,
         pkg_id: &PackageId,
@@ -102,6 +128,8 @@ impl JsProcedure {
                 pkg_id,
                 pkg_version,
                 Box::new(volumes.clone()),
+                ProcessGroupId(0),
+                None,
             )
             .await?
             .read_only_effects()
@@ -120,7 +148,7 @@ impl JsProcedure {
     }
 }
 
-fn unwrap_known_error<O: for<'de> Deserialize<'de>>(
+fn unwrap_known_error<O: DeserializeOwned>(
     error_value: ErrorValue,
 ) -> Result<O, (JsError, String)> {
     match error_value {
@@ -181,6 +209,8 @@ async fn js_action_execute() {
             &volumes,
             input,
             timeout,
+            ProcessGroupId(0),
+            None,
         )
         .await
         .unwrap()
@@ -236,6 +266,8 @@ async fn js_action_execute_error() {
             &volumes,
             input,
             timeout,
+            ProcessGroupId(0),
+            None,
         )
         .await
         .unwrap();
@@ -280,10 +312,62 @@ async fn js_action_fetch() {
             &volumes,
             input,
             timeout,
+            ProcessGroupId(0),
+            None,
         )
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn js_test_slow() {
+    let js_action = JsProcedure { args: vec![] };
+    let path: PathBuf = "test/js_action_execute/"
+        .parse::<PathBuf>()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let package_id = "test-package".parse().unwrap();
+    let package_version: Version = "0.3.0.3".parse().unwrap();
+    let name = ProcedureName::Action("slow".parse().unwrap());
+    let volumes: Volumes = serde_json::from_value(serde_json::json!({
+        "main": {
+            "type": "data"
+        },
+        "compat": {
+            "type": "assets"
+        },
+        "filebrowser" :{
+            "package-id": "filebrowser",
+            "path": "data",
+            "readonly": true,
+            "type": "pointer",
+            "volume-id": "main",
+        }
+    }))
+    .unwrap();
+    let input: Option<serde_json::Value> = None;
+    let timeout = Some(Duration::from_secs(10));
+    tracing::debug!("testing start");
+    tokio::select! {
+        a = js_action
+            .execute::<serde_json::Value, serde_json::Value>(
+                &path,
+                &package_id,
+                &package_version,
+                name,
+                &volumes,
+                input,
+                timeout,
+                ProcessGroupId(0),
+                None,
+            ) => { a.unwrap().unwrap(); },
+        _ = tokio::time::sleep(Duration::from_secs(1)) => ()
+    }
+    tracing::debug!("testing end should");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    tracing::debug!("Done");
 }
 #[tokio::test]
 async fn js_action_var_arg() {
@@ -325,6 +409,8 @@ async fn js_action_var_arg() {
             &volumes,
             input,
             timeout,
+            ProcessGroupId(0),
+            None,
         )
         .await
         .unwrap()
@@ -369,6 +455,145 @@ async fn js_action_test_rename() {
             &volumes,
             input,
             timeout,
+            ProcessGroupId(0),
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn js_action_test_deep_dir() {
+    let js_action = JsProcedure { args: vec![] };
+    let path: PathBuf = "test/js_action_execute/"
+        .parse::<PathBuf>()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let package_id = "test-package".parse().unwrap();
+    let package_version: Version = "0.3.0.3".parse().unwrap();
+    let name = ProcedureName::Action("test-deep-dir".parse().unwrap());
+    let volumes: Volumes = serde_json::from_value(serde_json::json!({
+        "main": {
+            "type": "data"
+        },
+        "compat": {
+            "type": "assets"
+        },
+        "filebrowser" :{
+            "package-id": "filebrowser",
+            "path": "data",
+            "readonly": true,
+            "type": "pointer",
+            "volume-id": "main",
+        }
+    }))
+    .unwrap();
+    let input: Option<serde_json::Value> = None;
+    let timeout = Some(Duration::from_secs(10));
+    js_action
+        .execute::<serde_json::Value, serde_json::Value>(
+            &path,
+            &package_id,
+            &package_version,
+            name,
+            &volumes,
+            input,
+            timeout,
+            ProcessGroupId(0),
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+}
+#[tokio::test]
+async fn js_action_test_deep_dir_escape() {
+    let js_action = JsProcedure { args: vec![] };
+    let path: PathBuf = "test/js_action_execute/"
+        .parse::<PathBuf>()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let package_id = "test-package".parse().unwrap();
+    let package_version: Version = "0.3.0.3".parse().unwrap();
+    let name = ProcedureName::Action("test-deep-dir-escape".parse().unwrap());
+    let volumes: Volumes = serde_json::from_value(serde_json::json!({
+        "main": {
+            "type": "data"
+        },
+        "compat": {
+            "type": "assets"
+        },
+        "filebrowser" :{
+            "package-id": "filebrowser",
+            "path": "data",
+            "readonly": true,
+            "type": "pointer",
+            "volume-id": "main",
+        }
+    }))
+    .unwrap();
+    let input: Option<serde_json::Value> = None;
+    let timeout = Some(Duration::from_secs(10));
+    js_action
+        .execute::<serde_json::Value, serde_json::Value>(
+            &path,
+            &package_id,
+            &package_version,
+            name,
+            &volumes,
+            input,
+            timeout,
+            ProcessGroupId(0),
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn js_rsync() {
+    let js_action = JsProcedure { args: vec![] };
+    let path: PathBuf = "test/js_action_execute/"
+        .parse::<PathBuf>()
+        .unwrap()
+        .canonicalize()
+        .unwrap();
+    let package_id = "test-package".parse().unwrap();
+    let package_version: Version = "0.3.0.3".parse().unwrap();
+    let name = ProcedureName::Action("test-rsync".parse().unwrap());
+    let volumes: Volumes = serde_json::from_value(serde_json::json!({
+        "main": {
+            "type": "data"
+        },
+        "compat": {
+            "type": "assets"
+        },
+        "filebrowser" :{
+            "package-id": "filebrowser",
+            "path": "data",
+            "readonly": true,
+            "type": "pointer",
+            "volume-id": "main",
+        }
+    }))
+    .unwrap();
+    let input: Option<serde_json::Value> = None;
+    let timeout = Some(Duration::from_secs(10));
+    js_action
+        .execute::<serde_json::Value, serde_json::Value>(
+            &path,
+            &package_id,
+            &package_version,
+            name,
+            &volumes,
+            input,
+            timeout,
+            ProcessGroupId(0),
+            None,
         )
         .await
         .unwrap()

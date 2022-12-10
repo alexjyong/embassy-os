@@ -16,13 +16,26 @@ const routes: Routes = [
       import('./pages/login/login.module').then(m => m.LoginPageModule),
   },
   {
-    path: 'embassy',
+    path: 'home',
+    canActivate: [AuthGuard],
+    loadChildren: () =>
+      import('./pages/home/home.module').then(m => m.HomePageModule),
+  },
+  {
+    path: 'system',
     canActivate: [AuthGuard],
     canActivateChild: [AuthGuard],
     loadChildren: () =>
       import('./pages/server-routes/server-routing.module').then(
         m => m.ServerRoutingModule,
       ),
+  },
+  {
+    path: 'updates',
+    canActivate: [AuthGuard],
+    canActivateChild: [AuthGuard],
+    loadChildren: () =>
+      import('./pages/updates/updates.module').then(m => m.UpdatesPageModule),
   },
   {
     path: 'marketplace',

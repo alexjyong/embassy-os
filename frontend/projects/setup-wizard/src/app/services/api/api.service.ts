@@ -1,51 +1,54 @@
+import * as jose from 'node-jose'
+import { DiskListResponse, EmbassyOSDiskInfo } from '@start9labs/shared'
 export abstract class ApiService {
-  // unencrypted
-  abstract getStatus(): Promise<GetStatusRes> // setup.status
+  pubkey?: jose.JWK.Key
+
+  abstract getStatus(): Promise<StatusRes> // setup.status
+  abstract getPubKey(): Promise<void> // setup.get-pubkey
   abstract getDrives(): Promise<DiskListResponse> // setup.disk.list
-  abstract set02XDrive(logicalname: string): Promise<void> // setup.recovery.v2.set
-  abstract getRecoveryStatus(): Promise<RecoveryStatusRes> // setup.recovery.status
+  abstract verifyCifs(cifs: CifsRecoverySource): Promise<EmbassyOSDiskInfo> // setup.cifs.verify
+  abstract attach(importInfo: AttachReq): Promise<void> // setup.attach
+  abstract execute(setupInfo: ExecuteReq): Promise<void> // setup.execute
+  abstract complete(): Promise<CompleteRes> // setup.complete
+  abstract exit(): Promise<void> // setup.exit
 
-  // encrypted
-  abstract verifyCifs(cifs: CifsRecoverySource): Promise<EmbassyOSRecoveryInfo> // setup.cifs.verify
-  abstract verifyProductKey(): Promise<void> // echo - throws error if invalid
-  abstract importDrive(importInfo: ImportDriveReq): Promise<SetupEmbassyRes> // setup.attach
-  abstract setupEmbassy(setupInfo: SetupEmbassyReq): Promise<SetupEmbassyRes> // setup.execute
-  abstract setupComplete(): Promise<SetupEmbassyRes> // setup.complete
+  async encrypt(toEncrypt: string): Promise<Encrypted> {
+    if (!this.pubkey) throw new Error('No pubkey found!')
+    const encrypted = await jose.JWE.createEncrypt(this.pubkey!)
+      .update(toEncrypt)
+      .final()
+    return {
+      encrypted,
+    }
+  }
 }
 
-export type GetStatusRes = {
-  'product-key': boolean
-  migrating: boolean
+type Encrypted = {
+  encrypted: string
 }
 
-export type ImportDriveReq = {
+export type StatusRes = {
+  'bytes-transferred': number
+  'total-bytes': number | null
+  complete: boolean
+} | null
+
+export type AttachReq = {
   guid: string
-  'embassy-password': string
+  'embassy-password': Encrypted
 }
 
-export type SetupEmbassyReq = {
+export type ExecuteReq = {
   'embassy-logicalname': string
-  'embassy-password': string
-  'recovery-source': CifsRecoverySource | DiskRecoverySource | null
-  'recovery-password': string | null
+  'embassy-password': Encrypted
+  'recovery-source': RecoverySource | null
+  'recovery-password': Encrypted | null
 }
 
-export type SetupEmbassyRes = {
+export type CompleteRes = {
   'tor-address': string
   'lan-address': string
   'root-ca': string
-}
-
-export type EmbassyOSRecoveryInfo = {
-  version: string
-  full: boolean
-  'password-hash': string | null
-  'wrapped-key': string | null
-}
-
-export type DiskListResponse = {
-  disks: DiskInfo[]
-  reconnect: string[]
 }
 
 export type DiskBackupTarget = {
@@ -55,7 +58,7 @@ export type DiskBackupTarget = {
   label: string | null
   capacity: number
   used: number | null
-  'embassy-os': EmbassyOSRecoveryInfo | null
+  'embassy-os': EmbassyOSDiskInfo | null
 }
 
 export type CifsBackupTarget = {
@@ -63,7 +66,7 @@ export type CifsBackupTarget = {
   path: string
   username: string
   mountable: boolean
-  'embassy-os': EmbassyOSRecoveryInfo | null
+  'embassy-os': EmbassyOSDiskInfo | null
 }
 
 export type DiskRecoverySource = {
@@ -71,33 +74,21 @@ export type DiskRecoverySource = {
   logicalname: string // partition logicalname
 }
 
+export type BackupRecoverySource = {
+  type: 'backup'
+  target: CifsRecoverySource | DiskRecoverySource
+}
+export type RecoverySource = BackupRecoverySource | DiskMigrateSource
+
+export type DiskMigrateSource = {
+  type: 'migrate'
+  guid: string
+}
+
 export type CifsRecoverySource = {
   type: 'cifs'
   hostname: string
   path: string
   username: string
-  password: string | null
-}
-
-export type DiskInfo = {
-  logicalname: string
-  vendor: string | null
-  model: string | null
-  partitions: PartitionInfo[]
-  capacity: number
-  guid: string | null // cant back up if guid exists
-}
-
-export type RecoveryStatusRes = {
-  'bytes-transferred': number
-  'total-bytes': number
-  complete: boolean
-}
-
-export type PartitionInfo = {
-  logicalname: string
-  label: string | null
-  capacity: number
-  used: number | null
-  'embassy-os': EmbassyOSRecoveryInfo | null
+  password: Encrypted | null
 }

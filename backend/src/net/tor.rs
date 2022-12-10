@@ -9,7 +9,7 @@ use futures::FutureExt;
 use reqwest::Client;
 use rpc_toolkit::command;
 use serde_json::json;
-use sqlx::{Executor, Sqlite};
+use sqlx::{Executor, Postgres};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use torut::control::{AsyncEvent, AuthenticatedConn, ConnError};
@@ -44,7 +44,7 @@ fn display_services(services: Vec<OnionAddressV3>, matches: &ArgMatches) {
         let row = row![&service.to_string()];
         table.add_row(row);
     }
-    table.print_tty(false);
+    table.print_tty(false).unwrap();
 }
 
 #[command(rename = "list-services", display(display_services))]
@@ -60,7 +60,7 @@ pub async fn list_services(
 #[instrument(skip(secrets))]
 pub async fn os_key<Ex>(secrets: &mut Ex) -> Result<TorSecretKeyV3, Error>
 where
-    for<'a> &'a mut Ex: Executor<'a, Database = Sqlite>,
+    for<'a> &'a mut Ex: Executor<'a, Database = Postgres>,
 {
     let key = sqlx::query!("SELECT tor_key FROM account")
         .fetch_one(secrets)
@@ -313,6 +313,7 @@ impl TorControllerInner {
                 }
                 Err(e) => {
                     tracing::info!("Failed to reconnect to tor control socket: {}", e);
+                    tracing::info!("Trying again in one second");
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -321,7 +322,7 @@ impl TorControllerInner {
         self.connection.replace(new_connection);
 
         // swap empty map for owned old service map
-        let old_services = std::mem::replace(&mut self.services, BTreeMap::new());
+        let old_services = std::mem::take(&mut self.services);
 
         // re add all of the services on the new control socket
         for ((package_id, interface_id), (tor_key, tor_cfg, ipv4)) in old_services {
@@ -360,9 +361,9 @@ impl TorControllerInner {
 
 pub async fn tor_health_check(client: &Client, tor_controller: &TorController) {
     tracing::debug!("Attempting to self-check tor address");
-    let onion = tor_controller.embassyd_onion().await;
+    let onion_addr = tor_controller.embassyd_onion().await;
     let result = client
-        .post(format!("http://{}/rpc/v1", onion))
+        .post(format!("http://{}/rpc/v1", onion_addr))
         .body(
             json!({
                 "jsonrpc": "2.0",
@@ -374,32 +375,35 @@ pub async fn tor_health_check(client: &Client, tor_controller: &TorController) {
         )
         .send()
         .await;
-    match result {
-        // if success, do nothing
-        Ok(_) => {
-            tracing::debug!(
-                "Successfully verified main tor address liveness at {}",
-                onion
-            )
-        }
-        // if failure, disconnect tor control port, and restart tor controller
-        Err(e) => {
-            tracing::error!("Unable to reach self over tor: {}", e);
-            loop {
-                match tor_controller.replace().await {
-                    Ok(restarted) => {
-                        if restarted {
-                            tracing::error!("Tor has been recently restarted, refusing to restart");
-                        }
-                        break;
+    if let Err(e) = result {
+        let mut num_attempt = 1;
+        tracing::error!("Unable to reach self over tor, we will retry now...");
+        tracing::error!("The first TOR error: {}", e);
+
+        loop {
+            tracing::debug!("TOR Reconnecting retry number: {num_attempt}");
+
+            match tor_controller.replace().await {
+                Ok(restarted) => {
+                    if restarted {
+                        tracing::error!("Tor has been recently restarted, refusing to restart again right now...");
                     }
-                    Err(e) => {
-                        tracing::error!("Unable to restart tor: {}", e);
-                        tracing::debug!("{:?}", e);
-                    }
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("TOR retry error: {}", e);
+                    tracing::error!("Unable to restart tor on attempt {num_attempt}...Retrying");
+
+                    num_attempt += 1;
+                    continue;
                 }
             }
         }
+    } else {
+        tracing::debug!(
+            "Successfully verified main tor address liveness at {}",
+            onion_addr
+        )
     }
 }
 
@@ -425,7 +429,7 @@ async fn test() {
         fn(AsyncEvent<'static>) -> BoxFuture<'static, Result<(), ConnError>>,
     > = conn.into_authenticated().await;
     let tor_key = torut::onion::TorSecretKeyV3::generate();
-    dbg!(connection.get_conf("SocksPort").await.unwrap());
+    connection.get_conf("SocksPort").await.unwrap();
     connection
         .add_onion_v3(
             &tor_key,

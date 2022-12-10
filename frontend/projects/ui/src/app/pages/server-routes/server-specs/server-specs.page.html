@@ -1,7 +1,7 @@
 <ion-header>
   <ion-toolbar>
     <ion-buttons slot="start">
-      <ion-back-button defaultHref="embassy"></ion-back-button>
+      <ion-back-button defaultHref="system"></ion-back-button>
     </ion-buttons>
     <ion-title>About</ion-title>
   </ion-toolbar>
@@ -13,7 +13,7 @@
   <ion-item-group *ngIf="server$ | async as server">
     <ion-item>
       <ion-label>
-        <h2>EmbassyOS Version</h2>
+        <h2>embassyOS Version</h2>
         <p>{{ server.version | displayEmver }}</p>
       </ion-label>
     </ion-item>

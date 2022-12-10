@@ -6,32 +6,33 @@ import { BasicInfo } from 'src/app/pages/developer-routes/developer-menu/form-in
 export interface DataModel {
   'server-info': ServerInfo
   'package-data': { [id: string]: PackageDataEntry }
-  'recovered-packages': { [id: string]: RecoveredPackageDataEntry }
   ui: UIData
 }
 
 export interface UIData {
-  name: string
-  'auto-check-updates': boolean
-  'pkg-order': string[]
-  'ack-welcome': string // EOS version
-  marketplace?: UIMarketplaceData
-  dev?: DevData
-  gaming?: {
+  name: string | null
+  'ack-welcome': string // eOS emver
+  marketplace: UIMarketplaceData
+  dev: DevData
+  gaming: {
     snake: {
       'high-score': number
     }
   }
+  'ack-instructions': Record<string, boolean>
 }
 
 export interface UIMarketplaceData {
-  'selected-id': string | null
+  'selected-url': string
   'known-hosts': {
-    [id: string]: {
-      url: string
-      name: string
-    }
+    'https://registry.start9.com/': UIStore
+    // 'https://community-registry.start9.com/': UIStore
+    [url: string]: UIStore
   }
+}
+
+export interface UIStore {
+  name?: string
 }
 
 export interface DevData {
@@ -40,8 +41,8 @@ export interface DevData {
 
 export interface DevProjectData {
   name: string
-  instructions?: string
-  config?: string
+  instructions: string
+  config: string
   'basic-info'?: BasicInfo
 }
 
@@ -51,10 +52,12 @@ export interface ServerInfo {
   'last-backup': string | null
   'lan-address': Url
   'tor-address': Url
+  'last-wifi-region': string | null
   'unread-notification-count': number
   'status-info': ServerStatusInfo
   'eos-version-compat': string
   'password-hash': string
+  hostname: string
 }
 
 export interface ServerStatusInfo {
@@ -71,11 +74,6 @@ export enum ServerStatus {
   Running = 'running',
   Updated = 'updated',
   BackingUp = 'backing-up',
-}
-export interface RecoveredPackageDataEntry {
-  title: string
-  icon: Url
-  version: string
 }
 
 export interface PackageDataEntry {
@@ -144,7 +142,6 @@ export interface Manifest extends MarketplaceManifest<DependencyConfig | null> {
   backup: BackupActions
   migrations: Migrations | null
   actions: Record<string, Action>
-  permissions: any // @TODO 0.3.1
 }
 
 export interface DependencyConfig {

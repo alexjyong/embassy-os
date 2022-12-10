@@ -1,77 +1,131 @@
 import { Injectable } from '@angular/core'
-import { pauseFor } from '@start9labs/shared'
+import { encodeBase64, pauseFor } from '@start9labs/shared'
 import {
   ApiService,
   CifsRecoverySource,
-  ImportDriveReq,
-  SetupEmbassyReq,
+  AttachReq,
+  ExecuteReq,
+  CompleteRes,
 } from './api.service'
+import * as jose from 'node-jose'
 
-let tries = 0
+let tries: number
 
 @Injectable({
   providedIn: 'root',
 })
 export class MockApiService extends ApiService {
-  constructor() {
-    super()
+  async getStatus() {
+    const restoreOrMigrate = true
+    const total = 4
+
+    await pauseFor(1000)
+
+    if (tries === undefined) {
+      tries = 0
+      return null
+    }
+
+    tries++
+    const progress = tries - 1
+
+    return {
+      'bytes-transferred': restoreOrMigrate ? progress : 0,
+      'total-bytes': restoreOrMigrate ? total : null,
+      complete: progress === total,
+    }
   }
 
-  // ** UNENCRYPTED **
-
-  async getStatus() {
+  async getPubKey() {
     await pauseFor(1000)
-    return {
-      'product-key': true,
-      migrating: false,
-    }
+
+    // randomly generated
+    // const keystore = jose.JWK.createKeyStore()
+    // this.pubkey = await keystore.generate('EC', 'P-256')
+
+    // generated from backend
+    this.pubkey = await jose.JWK.asKey({
+      kty: 'EC',
+      crv: 'P-256',
+      x: 'yHTDYSfjU809fkSv9MmN4wuojf5c3cnD7ZDN13n-jz4',
+      y: '8Mpkn744A5KDag0DmX2YivB63srjbugYZzWc3JOpQXI',
+    })
   }
 
   async getDrives() {
     await pauseFor(1000)
-    return {
-      disks: [
-        {
-          logicalname: 'abcd',
-          vendor: 'Samsung',
-          model: 'T5',
-          partitions: [
-            {
-              logicalname: 'pabcd',
-              label: null,
-              capacity: 73264762332,
-              used: null,
-              'embassy-os': {
-                version: '0.2.17',
-                full: true,
-                'password-hash': null,
-                'wrapped-key': null,
-              },
+    return [
+      {
+        logicalname: 'abcd',
+        vendor: 'Samsung',
+        model: 'T5',
+        partitions: [
+          {
+            logicalname: 'pabcd',
+            label: null,
+            capacity: 73264762332,
+            used: null,
+            'embassy-os': {
+              version: '0.2.17',
+              full: true,
+              'password-hash':
+                '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
+              'wrapped-key': null,
             },
-          ],
-          capacity: 123456789123,
-          guid: 'uuid-uuid-uuid-uuid',
-        },
-      ],
-      reconnect: [],
-    }
+            guid: null,
+          },
+        ],
+        capacity: 123456789123,
+        guid: 'uuid-uuid-uuid-uuid',
+      },
+      {
+        logicalname: 'dcba',
+        vendor: 'Crucial',
+        model: 'MX500',
+        partitions: [
+          {
+            logicalname: 'pbcba',
+            label: null,
+            capacity: 73264762332,
+            used: null,
+            'embassy-os': {
+              version: '0.3.3',
+              full: true,
+              'password-hash':
+                '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
+              'wrapped-key': null,
+            },
+            guid: null,
+          },
+        ],
+        capacity: 124456789123,
+        guid: null,
+      },
+      {
+        logicalname: 'wxyz',
+        vendor: 'SanDisk',
+        model: 'Specialness',
+        partitions: [
+          {
+            logicalname: 'pbcba',
+            label: null,
+            capacity: 73264762332,
+            used: null,
+            'embassy-os': {
+              version: '0.3.2',
+              full: true,
+              'password-hash':
+                '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
+              'wrapped-key': null,
+            },
+            guid: 'guid-guid-guid-guid',
+          },
+        ],
+        capacity: 123459789123,
+        guid: null,
+      },
+    ]
   }
-
-  async set02XDrive() {
-    await pauseFor(1000)
-    return
-  }
-
-  async getRecoveryStatus() {
-    tries = Math.min(tries + 1, 4)
-    return {
-      'bytes-transferred': tries,
-      'total-bytes': 4,
-      complete: tries === 4,
-    }
-  }
-
-  // ** ENCRYPTED **
 
   async verifyCifs(params: CifsRecoverySource) {
     await pauseFor(1000)
@@ -84,24 +138,25 @@ export class MockApiService extends ApiService {
     }
   }
 
-  async verifyProductKey() {
+  async attach(params: AttachReq) {
     await pauseFor(1000)
-    return
   }
 
-  async importDrive(params: ImportDriveReq) {
-    await pauseFor(3000)
-    return setupRes
-  }
-
-  async setupEmbassy(setupInfo: SetupEmbassyReq) {
-    await pauseFor(3000)
-    return setupRes
-  }
-
-  async setupComplete() {
+  async execute(setupInfo: ExecuteReq) {
     await pauseFor(1000)
-    return setupRes
+  }
+
+  async complete(): Promise<CompleteRes> {
+    await pauseFor(1000)
+    return {
+      'tor-address': 'http://asdafsadasdasasdasdfasdfasdf.onion',
+      'lan-address': 'https://embassy-abcdefgh.local',
+      'root-ca': encodeBase64(rootCA),
+    }
+  }
+
+  async exit() {
+    await pauseFor(1000)
   }
 }
 
@@ -127,111 +182,3 @@ Rf3ZOPm9QP92YpWyYDkfAU04xdDo1vR0MYjKPkl4LjRqSU/tcCJnPMbJiwq+bWpX
 2WJoEBXB/p15Kn6JxjI0ze2SnSI48JZ8it4fvxrhOo0VoLNIuCuNXJOwU17Rdl1W
 YJidaq7je6k18AdgPA0Kh8y1XtfUH3fTaVw4
 -----END CERTIFICATE-----`
-
-const setupRes = {
-  'tor-address': 'http://asdafsadasdasasdasdfasdfasdf.onion',
-  'lan-address': 'https://embassy-abcdefgh.local',
-  'root-ca': btoa(rootCA),
-}
-
-const disks = [
-  {
-    vendor: 'Samsung',
-    model: 'SATA',
-    logicalname: '/dev/sda',
-    guid: 'theguid',
-    partitions: [
-      {
-        logicalname: 'sda1',
-        label: 'label 1',
-        capacity: 100000,
-        used: 200.1255312,
-        'embassy-os': null,
-      },
-      {
-        logicalname: 'sda2',
-        label: 'label 2',
-        capacity: 50000,
-        used: 200.1255312,
-        'embassy-os': null,
-      },
-    ],
-    capacity: 150000,
-  },
-  {
-    vendor: 'Samsung',
-    model: null,
-    logicalname: 'dev/sdb',
-    partitions: [],
-    capacity: 34359738369,
-    guid: null,
-  },
-  {
-    vendor: 'Crucial',
-    model: 'MX500',
-    logicalname: 'dev/sdc',
-    guid: null,
-    partitions: [
-      {
-        logicalname: 'sdc1',
-        label: 'label 1',
-        capacity: 0,
-        used: null,
-        'embassy-os': {
-          version: '0.3.3',
-          full: true,
-          'password-hash': 'asdfasdfasdf',
-          'wrapped-key': '',
-        },
-      },
-      {
-        logicalname: 'sdc1MOCKTESTER',
-        label: 'label 1',
-        capacity: 0,
-        used: null,
-        'embassy-os': {
-          version: '0.3.6',
-          full: true,
-          // password is 'asdfasdf'
-          'password-hash':
-            '$argon2d$v=19$m=1024,t=1,p=1$YXNkZmFzZGZhc2RmYXNkZg$Ceev1I901G6UwU+hY0sHrFZ56D+o+LNJ',
-          'wrapped-key': '',
-        },
-      },
-      {
-        logicalname: 'sdc1',
-        label: 'label 1',
-        capacity: 0,
-        used: null,
-        'embassy-os': {
-          version: '0.3.3',
-          full: false,
-          'password-hash': 'asdfasdfasdf',
-          'wrapped-key': '',
-        },
-      },
-    ],
-    capacity: 100000,
-  },
-  {
-    vendor: 'Sandisk',
-    model: null,
-    logicalname: '/dev/sdd',
-    guid: null,
-    partitions: [
-      {
-        logicalname: 'sdd1',
-        label: null,
-        capacity: 10000,
-        used: null,
-        'embassy-os': {
-          version: '0.2.7',
-          full: true,
-          'password-hash': 'asdfasdfasdf',
-          'wrapped-key': '',
-        },
-      },
-    ],
-    capacity: 10000,
-  },
-]

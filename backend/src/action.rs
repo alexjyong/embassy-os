@@ -11,6 +11,7 @@ use tracing::instrument;
 use crate::config::{Config, ConfigSpec};
 use crate::context::RpcContext;
 use crate::id::ImageId;
+use crate::procedure::docker::DockerContainers;
 use crate::procedure::{PackageProcedure, ProcedureName};
 use crate::s9pk::manifest::PackageId;
 use crate::util::serde::{display_serializable, parse_stdin_deserializable, IoFormat};
@@ -58,12 +59,13 @@ impl Action {
     #[instrument]
     pub fn validate(
         &self,
+        container: &Option<DockerContainers>,
         eos_version: &Version,
         volumes: &Volumes,
         image_ids: &BTreeSet<ImageId>,
     ) -> Result<(), Error> {
         self.implementation
-            .validate(eos_version, volumes, image_ids, true)
+            .validate(container, eos_version, volumes, image_ids, true)
             .with_ctx(|_| {
                 (
                     crate::ErrorKind::ValidateS9pk,
@@ -95,7 +97,6 @@ impl Action {
                 ProcedureName::Action(action_id.clone()),
                 volumes,
                 input,
-                true,
                 None,
             )
             .await?
@@ -138,9 +139,10 @@ pub async fn action(
         .await
         .with_kind(crate::ErrorKind::NotFound)?
         .manifest()
-        .get(&mut db, true)
+        .get(&mut db)
         .await?
         .to_owned();
+
     if let Some(action) = manifest.actions.0.get(&action_id) {
         action
             .execute(

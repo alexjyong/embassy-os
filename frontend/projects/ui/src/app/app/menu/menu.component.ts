@@ -1,14 +1,13 @@
 import { ChangeDetectionStrategy, Component, Inject } from '@angular/core'
-import { AlertController } from '@ionic/angular'
-import { LocalStorageService } from '../../services/local-storage.service'
 import { EOSService } from '../../services/eos.service'
-import { ApiService } from '../../services/api/embassy-api.service'
-import { AuthService } from '../../services/auth.service'
-import { PatchDbService } from '../../services/patch-db/patch-db.service'
-import { Observable } from 'rxjs'
-import { map } from 'rxjs/operators'
+import { PatchDB } from 'patch-db-client'
+import { combineLatest, map, Observable, of, startWith } from 'rxjs'
 import { AbstractMarketplaceService } from '@start9labs/marketplace'
 import { MarketplaceService } from 'src/app/services/marketplace.service'
+import { DataModel } from 'src/app/services/patch-db/data-model'
+import { SplitPaneTracker } from 'src/app/services/split-pane.service'
+import { Emver } from '@start9labs/shared'
+import { marketplaceSame, versionLower } from '../../pages/updates/updates.page'
 
 @Component({
   selector: 'app-menu',
@@ -24,14 +23,14 @@ export class MenuComponent {
       icon: 'grid-outline',
     },
     {
-      title: 'Embassy',
-      url: '/embassy',
-      icon: 'cube-outline',
-    },
-    {
       title: 'Marketplace',
       url: '/marketplace',
       icon: 'storefront-outline',
+    },
+    {
+      title: 'Updates',
+      url: '/updates',
+      icon: 'globe-outline',
     },
     {
       title: 'Notifications',
@@ -39,9 +38,9 @@ export class MenuComponent {
       icon: 'notifications-outline',
     },
     {
-      title: 'Developer Tools',
-      url: '/developer',
-      icon: 'hammer-outline',
+      title: 'System',
+      url: '/system',
+      icon: 'construct-outline',
     },
   ]
 
@@ -54,47 +53,33 @@ export class MenuComponent {
 
   readonly showEOSUpdate$ = this.eosService.showUpdate$
 
-  readonly showDevTools$ = this.localStorageService.showDevTools$
+  readonly updateCount$: Observable<number> = combineLatest([
+    this.marketplaceService.getMarketplace$(),
+    this.patch.watch$('package-data'),
+  ]).pipe(
+    map(([marketplace, local]) =>
+      Object.entries(marketplace).reduce(
+        (length, [url, store]) =>
+          length +
+          (store?.packages.filter(
+            ({ manifest }) =>
+              marketplaceSame(manifest, local, url) &&
+              versionLower(manifest, local, this.emver),
+          ).length || 0),
+        0,
+      ),
+    ),
+    startWith(0),
+  )
 
-  readonly updateCount$: Observable<number> = this.marketplaceService
-    .getUpdates()
-    .pipe(map(pkgs => pkgs.length))
+  readonly sidebarOpen$ = this.splitPane.sidebarOpen$
 
   constructor(
-    private readonly alertCtrl: AlertController,
-    private readonly embassyApi: ApiService,
-    private readonly authService: AuthService,
-    private readonly patch: PatchDbService,
-    private readonly localStorageService: LocalStorageService,
+    private readonly patch: PatchDB<DataModel>,
     private readonly eosService: EOSService,
     @Inject(AbstractMarketplaceService)
     private readonly marketplaceService: MarketplaceService,
+    private readonly splitPane: SplitPaneTracker,
+    private readonly emver: Emver,
   ) {}
-
-  async presentAlertLogout() {
-    const alert = await this.alertCtrl.create({
-      header: 'Caution',
-      message:
-        'Do you know your password? If you log out and forget your password, you may permanently lose access to your Embassy.',
-      buttons: [
-        {
-          text: 'Cancel',
-          role: 'cancel',
-        },
-        {
-          text: 'Logout',
-          handler: () => this.logout(),
-          cssClass: 'enter-click',
-        },
-      ],
-    })
-
-    await alert.present()
-  }
-
-  // should wipe cache independent of actual BE logout
-  private logout() {
-    this.embassyApi.logout({})
-    this.authService.setUnverified()
-  }
 }

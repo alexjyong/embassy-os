@@ -1,15 +1,13 @@
 use std::future::Future;
 use std::marker::PhantomData;
-use std::ops::Deref;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
 use std::process::Stdio;
 use std::time::{Duration, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use color_eyre::eyre::eyre;
 use futures::stream::BoxStream;
-use futures::Stream;
-use futures::{FutureExt, SinkExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, SinkExt, Stream, StreamExt, TryStreamExt};
 use hyper::upgrade::Upgraded;
 use hyper::Error as HyperError;
 use rpc_toolkit::command;
@@ -30,7 +28,8 @@ use crate::core::rpc_continuations::{RequestGuid, RpcContinuation};
 use crate::error::ResultExt;
 use crate::procedure::docker::DockerProcedure;
 use crate::s9pk::manifest::PackageId;
-use crate::util::{display_none, serde::Reversible};
+use crate::util::display_none;
+use crate::util::serde::Reversible;
 use crate::{Error, ErrorKind};
 
 #[pin_project::pin_project]
@@ -87,9 +86,10 @@ async fn ws_handler<
             .with_kind(ErrorKind::Network)?;
     }
 
+    let mut ws_closed = false;
     while let Some(entry) = tokio::select! {
         a = logs.try_next() => Some(a?),
-        a = stream.try_next() => { a.with_kind(crate::ErrorKind::Network)?; None }
+        a = stream.try_next() => { a.with_kind(crate::ErrorKind::Network)?; ws_closed = true; None }
     } {
         if let Some(entry) = entry {
             let (_, log_entry) = entry.log_entry()?;
@@ -102,13 +102,15 @@ async fn ws_handler<
         }
     }
 
-    stream
-        .close(Some(CloseFrame {
-            code: CloseCode::Normal,
-            reason: "Log Stream Finished".into(),
-        }))
-        .await
-        .with_kind(ErrorKind::Network)?;
+    if !ws_closed {
+        stream
+            .close(Some(CloseFrame {
+                code: CloseCode::Normal,
+                reason: "Log Stream Finished".into(),
+            }))
+            .await
+            .with_kind(ErrorKind::Network)?;
+    }
 
     Ok(())
 }
@@ -121,7 +123,7 @@ pub struct LogResponse {
     end_cursor: Option<String>,
 }
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-#[serde(rename_all = "kebab-case", tag = "type")]
+#[serde(rename_all = "kebab-case")]
 pub struct LogFollowResponse {
     start_cursor: Option<String>,
     guid: RequestGuid,
@@ -509,26 +511,26 @@ pub async fn follow_logs(
 //     println!("{}", serialized);
 // }
 
-#[tokio::test]
-pub async fn test_logs() {
-    let mut cmd = Command::new("journalctl");
-    cmd.kill_on_drop(true);
+// #[tokio::test]
+// pub async fn test_logs() {
+//     let mut cmd = Command::new("journalctl");
+//     cmd.kill_on_drop(true);
 
-    cmd.arg("-f");
-    cmd.arg("CONTAINER_NAME=hello-world.embassy");
+//     cmd.arg("-f");
+//     cmd.arg("CONTAINER_NAME=hello-world.embassy");
 
-    let mut child = cmd.stdout(Stdio::piped()).spawn().unwrap();
-    let out = BufReader::new(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| Error::new(eyre!("No stdout available"), crate::ErrorKind::Journald))
-            .unwrap(),
-    );
+//     let mut child = cmd.stdout(Stdio::piped()).spawn().unwrap();
+//     let out = BufReader::new(
+//         child
+//             .stdout
+//             .take()
+//             .ok_or_else(|| Error::new(eyre!("No stdout available"), crate::ErrorKind::Journald))
+//             .unwrap(),
+//     );
 
-    let mut journalctl_entries = LinesStream::new(out.lines());
+//     let mut journalctl_entries = LinesStream::new(out.lines());
 
-    while let Some(line) = journalctl_entries.try_next().await.unwrap() {
-        dbg!(line);
-    }
-}
+//     while let Some(line) = journalctl_entries.try_next().await.unwrap() {
+//         dbg!(line);
+//     }
+// }

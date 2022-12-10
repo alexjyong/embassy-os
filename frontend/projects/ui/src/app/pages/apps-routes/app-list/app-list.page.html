@@ -1,6 +1,6 @@
 <ion-header>
   <ion-toolbar>
-    <ion-title>Services</ion-title>
+    <ion-title>Installed Services</ion-title>
     <ion-buttons slot="end">
       <badge-menu-button></badge-menu-button>
     </ion-buttons>
@@ -8,36 +8,31 @@
 </ion-header>
 
 <ion-content class="ion-padding">
+  <!-- loaded -->
+  <ng-container *ngIf="pkgs$ | async as pkgs; else loading">
+    <ng-container *ngIf="!pkgs.length; else list">
+      <div class="welcome-header">
+        <h1>Welcome to embassyOS</h1>
+      </div>
+      <widget-list></widget-list>
+    </ng-container>
+
+    <ng-template #list>
+      <ion-grid>
+        <ion-row>
+          <ion-col *ngFor="let pkg of pkgs" sizeSm="12" sizeLg="6">
+            <app-list-pkg
+              *ngIf="pkg | packageInfo | async as info"
+              [pkg]="info"
+            ></app-list-pkg>
+          </ion-col>
+        </ion-row>
+      </ion-grid>
+    </ng-template>
+  </ng-container>
+
   <!-- loading -->
   <ng-template #loading>
     <text-spinner text="Connecting to Embassy"></text-spinner>
   </ng-template>
-
-  <!-- not loading -->
-  <ng-container *ngIf="connected$ | async else loading">
-    <app-list-empty
-      *ngIf="empty; else list"
-      class="ion-text-center ion-padding"
-    ></app-list-empty>
-
-    <ng-template #list>
-      <app-list-reorder
-        *ngIf="pkgs.length"
-        [(pkgs)]="pkgs"
-        [reordering]="reordering"
-        (reorderingChange)="onReordering($event)"
-      ></app-list-reorder>
-
-      <ng-container *ngIf="recoveredPkgs.length && !reordering">
-        <ion-item-group>
-          <ion-item-divider>Recovered Services</ion-item-divider>
-          <app-list-rec
-            *ngFor="let rec of recoveredPkgs"
-            [rec]="rec"
-            (deleted)="deleteRecovered(rec)"
-          ></app-list-rec>
-        </ion-item-group>
-      </ng-container>
-    </ng-template>
-  </ng-container>
 </ion-content>

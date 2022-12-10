@@ -6,7 +6,6 @@ use rpc_toolkit::command;
 use tracing::instrument;
 
 use crate::context::RpcContext;
-use crate::db::util::WithRevision;
 use crate::dependencies::{
     break_all_dependents_transitive, heal_all_dependents_transitive, BreakageRes, DependencyError,
     DependencyReceipt, TaggedDependencyError,
@@ -61,12 +60,9 @@ impl StartReceipts {
     }
 }
 
-#[command(display(display_none))]
+#[command(display(display_none), metadata(sync_db = true))]
 #[instrument(skip(ctx))]
-pub async fn start(
-    #[context] ctx: RpcContext,
-    #[arg] id: PackageId,
-) -> Result<WithRevision<()>, Error> {
+pub async fn start(#[context] ctx: RpcContext, #[arg] id: PackageId) -> Result<(), Error> {
     let mut db = ctx.db.handle();
     let mut tx = db.begin().await?;
     let receipts = StartReceipts::new(&mut tx, &id).await?;
@@ -77,7 +73,7 @@ pub async fn start(
         .await?;
     heal_all_dependents_transitive(&ctx, &mut tx, &id, &receipts.dependency_receipt).await?;
 
-    let revision = tx.commit(None).await?;
+    tx.commit().await?;
     drop(receipts);
 
     ctx.managers
@@ -87,10 +83,7 @@ pub async fn start(
         .synchronize()
         .await;
 
-    Ok(WithRevision {
-        revision,
-        response: (),
-    })
+    Ok(())
 }
 #[derive(Clone)]
 pub struct StopReceipts {
@@ -128,13 +121,14 @@ impl StopReceipts {
 }
 
 #[instrument(skip(db))]
-async fn stop_common<Db: DbHandle>(
+pub async fn stop_common<Db: DbHandle>(
     db: &mut Db,
     id: &PackageId,
     breakages: &mut BTreeMap<PackageId, TaggedDependencyError>,
-) -> Result<(), Error> {
+) -> Result<MainStatus, Error> {
     let mut tx = db.begin().await?;
     let receipts = StopReceipts::new(&mut tx, id).await?;
+    let last_status = receipts.status.get(&mut tx).await?;
     receipts.status.set(&mut tx, MainStatus::Stopping).await?;
 
     tx.save().await?;
@@ -147,10 +141,14 @@ async fn stop_common<Db: DbHandle>(
     )
     .await?;
 
-    Ok(())
+    Ok(last_status)
 }
 
-#[command(subcommands(self(stop_impl(async)), stop_dry), display(display_none))]
+#[command(
+    subcommands(self(stop_impl(async)), stop_dry),
+    display(display_none),
+    metadata(sync_db = true)
+)]
 pub fn stop(#[arg] id: PackageId) -> Result<PackageId, Error> {
     Ok(id)
 }
@@ -173,23 +171,19 @@ pub async fn stop_dry(
 }
 
 #[instrument(skip(ctx))]
-pub async fn stop_impl(ctx: RpcContext, id: PackageId) -> Result<WithRevision<()>, Error> {
+pub async fn stop_impl(ctx: RpcContext, id: PackageId) -> Result<MainStatus, Error> {
     let mut db = ctx.db.handle();
     let mut tx = db.begin().await?;
 
-    stop_common(&mut tx, &id, &mut BTreeMap::new()).await?;
+    let last_statuts = stop_common(&mut tx, &id, &mut BTreeMap::new()).await?;
 
-    Ok(WithRevision {
-        revision: tx.commit(None).await?,
-        response: (),
-    })
+    tx.commit().await?;
+
+    Ok(last_statuts)
 }
 
-#[command(display(display_none))]
-pub async fn restart(
-    #[context] ctx: RpcContext,
-    #[arg] id: PackageId,
-) -> Result<WithRevision<()>, Error> {
+#[command(display(display_none), metadata(sync_db = true))]
+pub async fn restart(#[context] ctx: RpcContext, #[arg] id: PackageId) -> Result<(), Error> {
     let mut db = ctx.db.handle();
     let mut tx = db.begin().await?;
 
@@ -208,9 +202,7 @@ pub async fn restart(
     }
     *status = Some(MainStatus::Restarting);
     status.save(&mut tx).await?;
+    tx.commit().await?;
 
-    Ok(WithRevision {
-        revision: tx.commit(None).await?,
-        response: (),
-    })
+    Ok(())
 }

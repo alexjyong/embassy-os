@@ -12,14 +12,16 @@ beau_collector = "0.2.1"
 clap = "2.33.3"
 dashmap = "5.3.2"
 embassy-os = { path = "../../backend", default-features = false }
-emver = { version = "0.1.2", features = ["serde"] }
+emver = { version = "0.1.7", git = "https://github.com/Start9Labs/emver-rs.git", features = [
+    "serde",
+] }
 failure = "0.1.8"
 indexmap = { version = "1.6.2", features = ["serde"] }
 itertools = "0.10.0"
 lazy_static = "1.4"
 linear-map = { version = "1.2", features = ["serde_impl"] }
 log = "0.4.11"
-nix = "0.24.1"
+nix = "0.25.0"
 pest = "2.1"
 pest_derive = "2.1"
 rand = "0.8.5"
